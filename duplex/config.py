@@ -35,9 +35,9 @@ class DuplexConfig:
 
 @dataclass
 class TrainingConfig:
-    # H200-optimized defaults: batch 64 per GPU x 2 GPUs x grad_accum 2 = 256 effective
-    batch_size: int = 64
-    gradient_accumulation_steps: int = 2
+    # H200-optimized defaults: batch 32 per GPU x 2 GPUs x grad_accum 4 = 256 effective
+    batch_size: int = 32
+    gradient_accumulation_steps: int = 4
     learning_rate: float = 3e-4      # higher LR for the harder task
     weight_decay: float = 0.01
     max_steps: int = 100000
