@@ -144,11 +144,15 @@ class DuplexModel(nn.Module):
 
         self._current_workspace = ws
 
-        outputs = self.qwen(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-        )
+        # Qwen is frozen — inference_mode skips all activation tracking for it,
+        # giving a meaningful speed boost while adapter grads still flow through
+        # the patched layer.forward hooks
+        with torch.inference_mode(mode=False):
+            outputs = self.qwen(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
 
         self._current_workspace = None
 

@@ -35,8 +35,8 @@ class DuplexConfig:
 
 @dataclass
 class TrainingConfig:
-    # H200-optimized defaults: batch 32 per GPU × 2 GPUs × grad_accum 2 = 128 effective
-    batch_size: int = 32
+    # H200-optimized defaults: batch 64 per GPU × 2 GPUs × grad_accum 2 = 256 effective
+    batch_size: int = 64
     gradient_accumulation_steps: int = 2
     learning_rate: float = 2e-4      # scaled up for larger effective batch
     weight_decay: float = 0.01
