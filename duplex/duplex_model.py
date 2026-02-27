@@ -47,7 +47,7 @@ class DuplexModel(nn.Module):
         self.qwen = AutoModelForCausalLM.from_pretrained(
             config.qwen_model_path,
             quantization_config=quant_config,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
         )

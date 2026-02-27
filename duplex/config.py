@@ -30,20 +30,20 @@ class DuplexConfig:
 
     # Model paths
     qwen_model_path: str = "models/qwen3-1.7b-base"
-    quantize_4bit: bool = True
+    quantize_4bit: bool = False  # H200 has 282GB VRAM, no quantization needed
 
 
 @dataclass
 class TrainingConfig:
-    batch_size: int = 1
-    gradient_accumulation_steps: int = 16
+    batch_size: int = 8
+    gradient_accumulation_steps: int = 4
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
-    max_steps: int = 20000
-    warmup_steps: int = 1000
+    max_steps: int = 50000
+    warmup_steps: int = 2000
     log_every: int = 50
     eval_every: int = 1000
-    save_every: int = 2000
+    save_every: int = 5000
     checkpoint_dir: str = "checkpoints/duplex-1-1.7b"
     phase: int = 1
     grad_clip: float = 1.0
@@ -53,9 +53,9 @@ class TrainingConfig:
 
 @dataclass
 class DataConfig:
-    n_train_samples: int = 100000
-    n_val_samples: int = 10000
-    n_test_samples: int = 5000
+    n_train_samples: int = 500000
+    n_val_samples: int = 20000
+    n_test_samples: int = 10000
     data_dir: str = "generated_data_duplex"
     max_prompt_len: int = 128
     max_response_len: int = 256
