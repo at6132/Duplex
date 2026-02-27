@@ -10,38 +10,39 @@ class DuplexConfig:
     head_dim: int = 128
     n_decoder_layers: int = 28
     intermediate_size: int = 6144
-    vocab_size: int = 151936  # Qwen3 tokenizer vocab; actual may vary slightly
+    vocab_size: int = 151936
     max_seq_len: int = 4096
 
-    # Workspace
-    n_workspace_slots: int = 16
-    workspace_dim: int = 2048  # matches d_model
+    # Workspace — more slots = richer latent memory
+    n_workspace_slots: int = 32
+    workspace_dim: int = 2048
 
-    # Update Encoder (smaller to save VRAM)
-    n_encoder_layers: int = 2
+    # Update Encoder
+    n_encoder_layers: int = 4
     encoder_dim: int = 1024
-    encoder_ff_dim: int = 2048
+    encoder_ff_dim: int = 4096
 
-    # Adapter (fewer heads than Qwen to save VRAM)
-    adapter_n_heads: int = 8
+    # Adapter
+    adapter_n_heads: int = 16
 
     # Training
     adapter_dropout: float = 0.05
 
-    # Model paths
+    # Model paths & precision
     qwen_model_path: str = "models/qwen3-1.7b-base"
-    quantize_4bit: bool = False  # H200 has 282GB VRAM, no quantization needed
+    quantize_4bit: bool = False  # H200 has 282 GB VRAM — no quantization needed
 
 
 @dataclass
 class TrainingConfig:
-    batch_size: int = 8
-    gradient_accumulation_steps: int = 4
-    learning_rate: float = 1e-4
+    # H200-optimized defaults: batch 32 per GPU × 2 GPUs × grad_accum 2 = 128 effective
+    batch_size: int = 32
+    gradient_accumulation_steps: int = 2
+    learning_rate: float = 2e-4      # scaled up for larger effective batch
     weight_decay: float = 0.01
-    max_steps: int = 50000
-    warmup_steps: int = 2000
-    log_every: int = 50
+    max_steps: int = 100000
+    warmup_steps: int = 5000
+    log_every: int = 25
     eval_every: int = 1000
     save_every: int = 5000
     checkpoint_dir: str = "checkpoints/duplex-1-1.7b"
@@ -49,6 +50,11 @@ class TrainingConfig:
     grad_clip: float = 1.0
     seed: int = 42
     max_seq_len: int = 512
+
+    # DDP (set automatically by train.py)
+    use_ddp: bool = False
+    world_size: int = 1
+    local_rank: int = 0
 
 
 @dataclass
