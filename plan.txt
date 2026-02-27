@@ -1,0 +1,785 @@
+# Full-Duplex Language Model Research Brief
+
+## Project Summary
+
+We want to research and prototype a **full-duplex language model**: a model that can continue producing text while also accepting **new incoming text during generation**, updating its internal reasoning state without requiring a full stop, reset, and restart of the inference process.
+
+This project is **not** about computer control, screen streaming, or desktop agents right now. Those ideas may become downstream applications later, but the current scope is strictly about **language generation and reasoning under interruption**.
+
+The key goal is to move beyond the standard autoregressive interaction pattern used by most current LLMs.
+
+In the standard setup, the model works like this:
+
+1. A fixed input prompt is provided.
+2. The model begins generating output tokens autoregressively.
+3. If new information arrives during generation, the normal solution is to stop generation.
+4. The new information is appended to the prompt or conversation history.
+5. The model starts a new forward/generation process from the updated context.
+
+That means modern LLM interaction is fundamentally **half-duplex**:
+
+* input phase
+* generation phase
+* optional stop
+* new input phase
+* new generation phase
+
+Our research thesis is that this is an unnecessarily rigid interface. We want to explore whether a language model can be designed so that:
+
+* input remains open while output is being generated,
+* reasoning remains revisable while output is ongoing,
+* the model can incorporate new evidence or corrections in-flight,
+* the model can redirect its response trajectory without full conversational restart.
+
+This is important not only for user interaction, but because it may represent a more powerful abstraction for real-time reasoning systems, collaborative AI, tutoring systems, interactive theorem assistants, voice systems, and eventually any environment where the world can change while the model is still “thinking” or “speaking.”
+
+---
+
+# Core Idea
+
+## The problem with standard autoregressive decoding
+
+A normal autoregressive transformer assumes a single dominant contract:
+
+* the context is fixed up to the current decode step,
+* generation proceeds token by token,
+* previously generated tokens become part of the fixed history,
+* new external information does not enter the model’s reasoning state unless generation is explicitly interrupted and restarted.
+
+This causes three major limitations:
+
+### 1. Reasoning and expression are over-coupled
+
+The model’s internal reasoning trajectory and its emitted text are almost the same object. Once text has been emitted, the model is effectively committed to a trajectory, unless we interrupt and rebuild the prompt.
+
+### 2. Incoming correction cannot be naturally incorporated mid-stream
+
+If the user says “wait, that assumption is wrong” while the model is generating, the standard interaction pattern does not allow seamless incorporation. The system must stop, package the correction into a new prompt, and start a new decode process.
+
+### 3. There is no native concept of interruptibility or belief revision
+
+The transformer’s decode loop is optimized for next-token continuation, not for ongoing belief revision under exogenous updates.
+
+---
+
+# Research Goal
+
+We want to explore a model architecture and inference protocol where the system has:
+
+1. **An output channel** for ongoing generation.
+2. **An input/interruption channel** for new incoming text while generation is active.
+3. **A revisable internal reasoning state** that can be updated when corrections arrive.
+4. **A continuation mechanism** that lets output adapt after the update, without requiring full restart from scratch.
+
+This means we want to partially decouple:
+
+* **reasoning state** from
+* **emitted surface text**
+
+In other words, the model should not only be a next-token machine. It should also behave like a live cognitive process with an updatable internal workspace.
+
+---
+
+# Precise Research Question
+
+The first concrete research question is:
+
+**Can a small custom language model be trained so that, during active generation, it can receive a correction or new fact, update its latent/task state, and continue generation coherently without requiring a full re-run over a newly concatenated prompt?**
+
+We do not need to solve this at frontier scale.
+We only need to prove the principle in a small, controlled, technically sound prototype.
+
+---
+
+# Scope Boundaries
+
+## In Scope
+
+* Small custom model(s) trained locally.
+* PyTorch implementation.
+* Toy tasks designed specifically around interruption and revision.
+* Architectural experimentation.
+* Clear instrumentation and ablation testing.
+* Measuring whether mid-generation correction can be integrated coherently.
+
+## Out of Scope for V1
+
+* Production LLM quality.
+* Broad general knowledge.
+* Human-level reasoning.
+* RL agents.
+* Tool use.
+* Computer action.
+* Voice.
+* Multi-modal inputs.
+* Scaling beyond proof-of-concept.
+
+---
+
+# Conceptual Model
+
+The cleanest way to think about the project is as a model with three conceptual layers:
+
+## 1. Incoming text stream
+
+This is the stream of initial prompt plus any later correction/update messages.
+Examples:
+
+* “Solve this math problem.”
+* “Actually, x = 7, not 5.”
+* “Correction: the city is Canberra, not Sydney.”
+
+## 2. Internal reasoning/workspace state
+
+This is the model’s active latent representation of:
+
+* current task,
+* current assumptions,
+* intermediate conclusions,
+* uncertainty,
+* revision markers,
+* active discourse plan.
+
+This state should be more persistent and more revisable than emitted tokens.
+
+## 3. Output text stream
+
+This is the surface language being generated. It should be an expression of the current internal state, not the sole driver of state.
+
+The model should be able to:
+
+* emit text,
+* receive correction,
+* update latent state,
+* alter future emitted text.
+
+This is the core conceptual distinction between **surface generation** and **internal reasoning state**.
+
+---
+
+# Why This Is Architecturally Hard
+
+Standard autoregressive transformers are trained on a simple next-token objective over a single sequence. They do not natively expose a separate mechanism for:
+
+* exogenous event ingestion during decode,
+* revising hidden state in response to asynchronous updates,
+* distinguishing tentative versus committed content,
+* maintaining a stable reasoning workspace independent of emitted text.
+
+Therefore, simply downloading a pretrained open-source model and “changing a little bit of architecture” will likely fail for the following reasons:
+
+1. **Weight compatibility breaks easily** when layer structure changes.
+2. **Inference codepaths assume standard autoregressive caching**.
+3. **Pretraining objective did not teach in-flight revision behavior**.
+4. **Model may collapse into prompt concatenation heuristics** rather than genuine online state update.
+
+Because of this, for research purity and clean diagnostics, the best path is to build a **small model from scratch** with a narrow, synthetic training curriculum.
+
+---
+
+# Candidate Architecture Families
+
+## Option A: Standard autoregressive transformer baseline
+
+This is the control condition.
+
+### Description
+
+A normal decoder-only transformer trained on sequences that include prompt, answer, interruption markers, and revised answer continuations.
+
+### Role in project
+
+We absolutely need this as a baseline, because many apparent “duplex” behaviors can be faked by simply training a model to continue sequences containing interruption tokens.
+
+### Benefit
+
+* Easy to build.
+* Easy to train.
+* Gives baseline loss/performance.
+
+### Limitation
+
+It does not truly maintain a separate revisable state. It just learns sequence continuation over serialized correction patterns.
+
+This model is required for comparison, but it is not the final target.
+
+---
+
+## Option B: Dual-stream transformer
+
+### Description
+
+A model with two distinct input pathways:
+
+* a main generation stream,
+* an interruption/update stream.
+
+The main stream handles ongoing discourse generation.
+The interruption stream carries new incoming correction messages or revised facts.
+A fusion mechanism combines them into a shared internal representation that influences subsequent token generation.
+
+### Intuition
+
+Instead of treating all text as one flat concatenated sequence, the model explicitly knows that some tokens belong to:
+
+* the active output trajectory,
+* and some belong to incoming corrective events.
+
+### Advantages
+
+* More faithful to full-duplex framing.
+* Easier than fully redesigning the transformer around an explicit workspace object.
+* Can be prototyped locally.
+
+### Limitations
+
+* Still may partially collapse into serialized conditioning.
+* Internal reasoning is not as explicitly separated from text as in a workspace model.
+
+---
+
+## Option C: Workspace-based model with generator split
+
+### Description
+
+This is the most interesting architecture conceptually.
+
+The model is divided into two partially distinct subsystems:
+
+1. **Workspace updater**: ingests incoming prompt/correction text and updates a latent workspace representation.
+2. **Generator**: emits output conditioned on the current workspace.
+
+The workspace is intended to represent an intermediate reasoning state, not just emitted tokens.
+
+### Intuition
+
+The model should not think only through the text it has already emitted. Instead, it should maintain a latent working state that survives across decoding steps and can be modified by new information.
+
+### Advantages
+
+* Most aligned with the research goal.
+* Strongest conceptual decoupling between reasoning and text.
+* Naturally supports future ideas like uncertainty tracking, local rollback, tentative drafts, or competing hypotheses.
+
+### Limitations
+
+* More custom engineering.
+* More training complexity.
+* Harder to stabilize and evaluate.
+
+---
+
+# Recommended Direction for V1
+
+For the first serious research prototype, the recommendation is:
+
+## Build two models
+
+### Model 1: Baseline
+
+A normal decoder-only autoregressive transformer trained on serialized interruption/revision sequences.
+
+### Model 2: Experimental
+
+A small **workspace-conditioned generator** or simplified dual-stream variant.
+
+This gives us a clean experimental comparison.
+
+If time and complexity must be minimized, start with:
+
+* baseline decoder-only transformer,
+* experimental dual-stream transformer.
+
+If the team is comfortable building slightly more custom internals, the more interesting experimental model is:
+
+* **workspace updater + generator split**.
+
+---
+
+# Recommended V1 Experimental Architecture
+
+The most technically interesting practical V1 is:
+
+## Workspace-Updater + Generator Architecture
+
+### High-level design
+
+The system has:
+
+1. **Input Encoder / Update Encoder**
+   Processes incoming prompt or correction events.
+
+2. **Persistent Workspace State**
+   A latent tensor or set of slots that stores current task state.
+
+3. **Generator Decoder**
+   Emits output tokens conditioned on both previously generated text and current workspace.
+
+4. **Update Operation During Generation**
+   At designated update times, new text arrives and is encoded into the workspace, modifying future generation.
+
+### Simplified formalism
+
+Let:
+
+* `W_t` = workspace state at time t
+* `Y_<t` = output tokens generated so far
+* `U_k` = incoming update message k
+
+Then:
+
+* workspace update step: `W_t = f_update(W_{t-1}, U_k)`
+* generation step: `y_t ~ p(y_t | Y_<t, W_t)`
+
+This is the essential separation.
+
+The emitted text history still matters, but the workspace becomes a first-class conditioning object.
+
+---
+
+# Concrete Technical Proposal
+
+## Workspace representation
+
+For a small prototype, the workspace can be implemented as:
+
+* a learned matrix of `N` latent slots,
+* each slot of dimension `D`,
+* e.g. shape `[N_slots, D_model]`.
+
+Example initial sizes:
+
+* `N_slots = 8` or `16`
+* `D_model = 256` or `384`
+
+The workspace can be updated with cross-attention or gated recurrent updates.
+
+### Update mechanism
+
+Incoming correction text is encoded by a lightweight transformer encoder or the same token embedding stack plus a few self-attention blocks.
+
+Then the encoded update attends into the workspace and modifies it using one of:
+
+* additive gated update,
+* GRU-style latent update,
+* cross-attention followed by residual MLP,
+* slot attention style update.
+
+A simple gated update is probably best for V1:
+
+`W_new = W_old + sigmoid(g(update, W_old)) * delta(update, W_old)`
+
+This lets incoming correction text alter workspace state without overwriting everything.
+
+---
+
+## Generator conditioning
+
+The decoder receives:
+
+* normal token embeddings for generated text history,
+* plus cross-attention to workspace slots.
+
+Thus each generation step is conditioned on:
+
+* past emitted text,
+* current workspace.
+
+This makes future text responsive to any workspace updates caused by interruptions.
+
+---
+
+## Interrupt handling protocol
+
+During training and evaluation, generation proceeds in segments.
+
+Example:
+
+1. Initial prompt arrives.
+2. Workspace is initialized/updated.
+3. Model generates first output segment.
+4. A correction/update arrives.
+5. Update encoder processes correction.
+6. Workspace is modified.
+7. Model continues generation under updated workspace.
+
+This does not require restarting the whole model from scratch conceptually, even though implementation details may still reuse cached activations partially.
+
+The key point is that update events are modeled as first-class state changes, not just prompt rewrites.
+
+---
+
+# Training Task Design
+
+We do **not** want generic internet-scale pretraining for V1.
+We want synthetic or semi-synthetic tasks specifically crafted to test interruption and revision.
+
+The dataset should enforce one thing:
+
+**The correct continuation after an interruption must depend on incorporating the new update, not merely continuing the original trajectory.**
+
+## Categories of toy tasks
+
+### 1. Fact correction tasks
+
+Example:
+
+* Prompt: “Write a short answer about the capital of Australia.”
+* Early generation may begin incorrectly or ambiguously.
+* Update: “Correction: the capital is Canberra.”
+* Desired continuation: model pivots and continues coherently using Canberra.
+
+### 2. Variable substitution tasks
+
+Example:
+
+* Prompt: “Solve step-by-step assuming x = 5.”
+* Update: “Correction: x = 7.”
+* Desired continuation: downstream reasoning changes consistently.
+
+### 3. Constraint revision tasks
+
+Example:
+
+* Prompt: “Plan a 3-day trip with budget $1500.”
+* Update: “New constraint: budget is $900.”
+* Desired continuation: revise plan accordingly.
+
+### 4. Mid-proof or chain-of-thought redirection tasks
+
+Example:
+
+* Prompt: “Reason through a logic puzzle.”
+* Update: “Assumption B is false.”
+* Desired continuation: abandon branch and continue from revised assumptions.
+
+### 5. Structured transformation tasks
+
+Example:
+
+* Prompt: “Generate JSON for a user profile with age = 25.”
+* Update: “Correction: age should be 19 and add student_status=true.”
+* Desired continuation: structure reflects corrected state.
+
+---
+
+# Dataset Format
+
+We want a format that makes interrupt events explicit.
+
+## Example serialized training sample
+
+A single sample could include:
+
+* initial prompt,
+* initial generation prefix,
+* explicit update event,
+* desired continuation under revised state.
+
+Conceptually:
+
+* `PROMPT: ...`
+* `OUTPUT_PREFIX: ...`
+* `UPDATE: ...`
+* `TARGET_CONTINUATION: ...`
+
+But for the experimental model, during training we should feed these as separate channels or stages rather than a single concatenated string whenever possible.
+
+## Suggested internal training sample structure
+
+```python
+{
+  "prompt_tokens": [...],
+  "initial_target_tokens": [...],
+  "update_tokens": [...],
+  "revised_target_tokens": [...],
+  "metadata": {
+    "task_type": "fact_correction",
+    "update_step": 12,
+    "requires_revision": True
+  }
+}
+```
+
+This lets training simulate an update arriving after some amount of generation.
+
+---
+
+# Training Regime
+
+## Phase 1: Basic language shaping
+
+Train the model to perform the toy tasks without interruption first, so the generator has a basic grip on token prediction in the chosen synthetic domain.
+
+## Phase 2: Interrupted generation training
+
+Introduce tasks with explicit updates arriving at intermediate decode positions.
+
+The training loop can simulate:
+
+1. Encode initial prompt into workspace.
+2. Teacher-force generation of initial output prefix.
+3. Inject update.
+4. Update workspace.
+5. Teacher-force revised continuation.
+
+## Phase 3: Adversarial revision tasks
+
+Train cases where the update conflicts with earlier reasoning, so the model must actively pivot.
+
+---
+
+# What Exactly We Are Testing
+
+We are **not** testing whether the model can simply continue a sequence containing the text “Correction: …”.
+
+We are testing whether the experimental model is better than a baseline at:
+
+1. **Integrating new information mid-generation**
+2. **Revising downstream content coherently**
+3. **Avoiding contradictions with the update**
+4. **Maintaining discourse continuity after revision**
+5. **Preserving relevant earlier content while correcting affected portions**
+
+This means our testing must distinguish true revision behavior from trivial prompt continuation behavior.
+
+---
+
+# Evaluation Design
+
+## 1. Baseline comparison
+
+We need at least one baseline:
+
+* standard decoder-only autoregressive transformer of similar size and training budget.
+
+Then we compare it to the experimental architecture.
+
+## 2. Controlled interruption benchmark
+
+Construct a held-out synthetic evaluation set where:
+
+* prompt defines an initial task,
+* interruption changes one critical assumption,
+* correct completion requires adapting to the new information.
+
+## 3. Metrics
+
+### A. Revision Accuracy
+
+Did the final continuation actually reflect the correction?
+
+Examples:
+
+* if updated fact is Canberra, does output use Canberra?
+* if variable changes from 5 to 7, does downstream arithmetic reflect 7?
+
+### B. Contradiction Rate
+
+Does output continue using invalidated assumptions after the update?
+
+### C. Coherence After Update
+
+Does the continuation remain grammatically and logically smooth after revision?
+This may require a mix of automatic and manual evaluation.
+
+### D. Update Latency
+
+How many generated tokens pass before the correction is reflected in output?
+A lower latency is better.
+
+### E. Recovery Quality
+
+If the model had already begun a wrong trajectory, how cleanly does it pivot?
+
+### F. Retention of unaffected content
+
+Does the model change only what is necessary, rather than derailing the entire response?
+
+---
+
+# Example Evaluation Scenarios
+
+## Scenario 1: Fact correction
+
+Prompt: “Explain briefly: The capital of Australia is …”
+Model begins outputting.
+Update arrives: “Correction: capital is Canberra.”
+
+Success condition:
+
+* continuation aligns with Canberra,
+* does not keep reinforcing Sydney,
+* discourse remains smooth.
+
+## Scenario 2: Arithmetic assumption change
+
+Prompt: “Given x = 5, compute 3x + 2 step by step.”
+Update: “Actually x = 7.”
+
+Success condition:
+
+* subsequent reasoning uses 7,
+* final answer becomes 23,
+* no lingering references to x = 5 in post-update region.
+
+## Scenario 3: Constraint update
+
+Prompt: “Plan a shopping list under $100.”
+Update: “New budget is $60.”
+
+Success condition:
+
+* continuation revises allocations to fit $60,
+* reasoning remains coherent.
+
+---
+
+# Strong Ablation Plan
+
+A serious experiment requires ablations.
+
+## Ablation 1: No workspace update
+
+Disable update mechanism and measure collapse in revision accuracy.
+
+## Ablation 2: Concatenation-only baseline
+
+Serialize update into plain text and let standard transformer continue.
+Compare against explicit workspace model.
+
+## Ablation 3: Frozen workspace during generation
+
+Allow initial workspace but disallow updates mid-generation.
+This isolates benefit of true update capability.
+
+## Ablation 4: Different workspace sizes
+
+Test whether more slots improve revision fidelity.
+
+## Ablation 5: Different update types
+
+Measure whether model handles:
+
+* fact updates,
+* arithmetic updates,
+* constraint updates,
+* logical invalidations,
+  with similar or different performance.
+
+---
+
+# What Counts as Success in V1
+
+The V1 project is successful if we can demonstrate all of the following:
+
+1. A small experimental model can be trained locally.
+2. It can generate text in a staged prompt -> output -> update -> continuation setting.
+3. It shows better revision behavior than a comparable standard autoregressive baseline.
+4. It updates downstream content more reliably after interruption.
+5. It does this without merely being evaluated as a full stop-and-restart chat turn.
+
+The bar is **not** that the model becomes generally smart.
+The bar is that it demonstrates a real, measurable advantage on interrupted generation tasks.
+
+---
+
+# Implementation Notes
+
+## Framework
+
+* PyTorch.
+* Keep custom code minimal but explicit.
+* Strong logging of hidden state/workspace dynamics.
+
+## Model size
+
+Reasonable first-pass sizes:
+
+* embedding dim 256–384,
+* 4–8 transformer layers,
+* 4–8 heads,
+* small vocab for synthetic tasks if necessary.
+
+## Local feasibility
+
+A single high-end consumer GPU is sufficient for toy models and synthetic-task training.
+The point is architectural validation, not capability scaling.
+
+---
+
+# Codebase Structure Recommendation
+
+```text
+project/
+  configs/
+    baseline.yaml
+    workspace_model.yaml
+    train.yaml
+  data/
+    generate_synthetic_tasks.py
+    dataset.py
+  models/
+    baseline_decoder.py
+    update_encoder.py
+    workspace_module.py
+    workspace_generator.py
+  training/
+    train_baseline.py
+    train_workspace.py
+    losses.py
+    schedule.py
+  eval/
+    benchmark.py
+    metrics.py
+    ablations.py
+  scripts/
+    run_train.sh
+    run_eval.sh
+  notebooks/
+    analysis.ipynb
+  README.md
+```
+
+---
+
+# Important Engineering Philosophy
+
+This should be treated as a **clean research prototype**.
+That means:
+
+* keep the task narrow,
+* keep the instrumentation strong,
+* keep the baselines honest,
+* avoid feature creep,
+* avoid premature scaling.
+
+We are trying to answer a question about model architecture and interrupted generation, not build a general assistant.
+
+---
+
+# Summary of the Project Thesis
+
+We are exploring whether language models can be redesigned from a half-duplex prompt-response machine into a **full-duplex reasoning system**.
+
+The central hypothesis is that text generation and reasoning should not be perfectly fused. Instead, a model should maintain a revisable internal state that can absorb new incoming information while output is in progress, allowing it to change course without a full reset.
+
+The proposed V1 research direction is to train a small custom model from scratch on synthetic interruption-and-revision tasks, compare a standard autoregressive baseline against an experimental architecture with an explicit update pathway and latent workspace, and measure whether the experimental system integrates mid-generation corrections more accurately and coherently.
+
+If this works even at small scale, it would validate the core concept and justify deeper architectural work later.
+
+---
+
+# Direct Ask to Engineering
+
+Please help design and implement a minimal research prototype for this idea.
+
+Immediate objectives:
+
+1. Build a standard baseline decoder-only transformer.
+2. Build an experimental workspace-conditioned generator or dual-stream update model.
+3. Create a synthetic benchmark suite for interruption-and-revision tasks.
+4. Train both locally.
+5. Compare revision quality, contradiction rate, update latency, and coherence.
+
+The goal is not productization. The goal is to determine whether full-duplex/revisable generation is a meaningful architectural direction.

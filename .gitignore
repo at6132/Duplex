@@ -1,0 +1,55 @@
+# Model weights & checkpoints
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+
+# Downloaded/cached models
+models/
+models_cache/
+hf_cache/
+~/.cache/huggingface/
+
+# Generated training data
+generated_data_duplex/
+generated_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+wandb/
+runs/
+tensorboard_logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,78 @@
+{
+  "baseline": {
+    "revision_accuracy": 0.676,
+    "contradiction_rate": 0.018,
+    "mean_update_latency": 26.88757396449704,
+    "n_samples": 500,
+    "per_task": {
+      "key_value_update": {
+        "revision_accuracy": 0.0,
+        "contradiction_rate": 0.0,
+        "mean_update_latency": 0.0,
+        "n_samples": 111
+      },
+      "variable_substitution": {
+        "revision_accuracy": 1.0,
+        "contradiction_rate": 0.05154639175257732,
+        "mean_update_latency": 57.54639175257732,
+        "n_samples": 97
+      },
+      "arithmetic_correction": {
+        "revision_accuracy": 0.5405405405405406,
+        "contradiction_rate": 0.036036036036036036,
+        "mean_update_latency": 10.616666666666667,
+        "n_samples": 111
+      },
+      "constraint_revision": {
+        "revision_accuracy": 1.0,
+        "contradiction_rate": 0.0,
+        "mean_update_latency": 29.0,
+        "n_samples": 96
+      },
+      "fact_correction": {
+        "revision_accuracy": 1.0,
+        "contradiction_rate": 0.0,
+        "mean_update_latency": 1.0,
+        "n_samples": 85
+      }
+    }
+  },
+  "workspace": {
+    "revision_accuracy": 0.572,
+    "contradiction_rate": 0.026,
+    "mean_update_latency": 32.21328671328671,
+    "n_samples": 500,
+    "per_task": {
+      "key_value_update": {
+        "revision_accuracy": 0.0,
+        "contradiction_rate": 0.0,
+        "mean_update_latency": 0.0,
+        "n_samples": 111
+      },
+      "variable_substitution": {
+        "revision_accuracy": 1.0,
+        "contradiction_rate": 0.05154639175257732,
+        "mean_update_latency": 55.92783505154639,
+        "n_samples": 97
+      },
+      "arithmetic_correction": {
+        "revision_accuracy": 0.14414414414414414,
+        "contradiction_rate": 0.07207207207207207,
+        "mean_update_latency": 20.0625,
+        "n_samples": 111
+      },
+      "constraint_revision": {
+        "revision_accuracy": 0.9895833333333334,
+        "contradiction_rate": 0.0,
+        "mean_update_latency": 28.873684210526317,
+        "n_samples": 96
+      },
+      "fact_correction": {
+        "revision_accuracy": 0.9176470588235294,
+        "contradiction_rate": 0.0,
+        "mean_update_latency": 9.282051282051283,
+        "n_samples": 85
+      }
+    }
+  }
+}

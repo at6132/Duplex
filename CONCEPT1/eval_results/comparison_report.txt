@@ -1,0 +1,21 @@
+
+============================================================
+  DUPLEX LM EVALUATION REPORT
+============================================================
+
+Metric                             Baseline    Workspace
+------------------------------------------------------------
+Revision Accuracy                    67.6%       57.2%
+Contradiction Rate                    1.8%        2.6%
+Mean Update Latency (chars)            26.9         32.2
+N Samples                               500          500
+
+Per-Task Revision Accuracy:
+------------------------------------------------------------
+  arithmetic_correction              54.1%       14.4%
+  constraint_revision               100.0%       99.0%
+  fact_correction                   100.0%       91.8%
+  key_value_update                    0.0%        0.0%
+  variable_substitution             100.0%      100.0%
+
+============================================================
