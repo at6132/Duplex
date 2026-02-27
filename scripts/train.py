@@ -35,7 +35,7 @@ def main():
 
     duplex_config = DuplexConfig(
         qwen_model_path=args.qwen_path,
-        quantize_4bit=not args.no_quantize,
+        quantize_4bit=False,
     )
 
     train_config = TrainingConfig(
