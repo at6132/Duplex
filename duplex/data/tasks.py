@@ -1,6 +1,10 @@
 """
-Synthetic + natural correction task generators for Duplex-1 training.
-Produces structured samples with prompt, partial response, correction, and revised continuation.
+Synthetic correction task generators for Duplex-1 training.
+
+Key design: partial_response must contain WRONG information that the correction
+fixes. The revised_continuation must explicitly acknowledge the correction and
+use the CORRECT information. This forces the model to depend on the workspace
+update to produce the right output.
 """
 
 import random
@@ -41,16 +45,19 @@ TOPICS = [
 NAMES = [
     "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry",
     "Iris", "Jack", "Kate", "Leo", "Maya", "Nathan", "Olivia", "Peter",
+    "Quinn", "Rosa", "Sam", "Tara", "Uma", "Victor", "Wendy", "Xander",
 ]
 
 PROFESSIONS = [
     "software engineer", "doctor", "teacher", "architect", "chef",
     "photographer", "writer", "musician", "scientist", "designer",
+    "nurse", "lawyer", "pilot", "dentist", "accountant",
 ]
 
 HOBBIES = [
     "reading", "swimming", "painting", "cooking", "cycling", "running",
     "chess", "gardening", "photography", "writing", "hiking", "yoga",
+    "dancing", "camping", "surfing", "knitting",
 ]
 
 COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "black", "white"]
@@ -58,9 +65,28 @@ COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "black", "white"
 CITIES = [
     "New York", "London", "Paris", "Tokyo", "San Francisco",
     "Berlin", "Sydney", "Toronto", "Singapore", "Dubai",
+    "Seoul", "Mumbai", "Cairo", "Rome", "Amsterdam",
 ]
 
 LANGUAGES = ["Python", "JavaScript", "Rust", "Go", "TypeScript", "Java", "C++", "Ruby"]
+
+# Varied acknowledgment phrases so the model learns the general pattern, not a single template
+ACKNOWLEDGE_PHRASES = [
+    "Correcting that",
+    "Thanks for the correction",
+    "You're right, let me fix that",
+    "Updating my answer",
+    "I see, adjusting accordingly",
+    "Good catch, here's the corrected version",
+    "Noted, recalculating",
+    "Right, let me redo this",
+    "Understood, here's the updated answer",
+    "My mistake, correcting now",
+]
+
+
+def _ack() -> str:
+    return random.choice(ACKNOWLEDGE_PHRASES)
 
 
 # =============================================================================
@@ -79,7 +105,7 @@ def generate_fact_correction() -> dict[str, Any]:
     )
     correction = f"That's incorrect. The capital of {country} is actually {correct}, not {wrong}."
     revised = (
-        f"I apologize for the error. The capital of {country} is {correct}. "
+        f"{_ack()}. The capital of {country} is {correct}, not {wrong}. "
         f"While {wrong} is the largest city, {correct} is the official capital "
         f"and serves as the seat of government."
     )
@@ -117,12 +143,12 @@ def generate_variable_substitution() -> dict[str, Any]:
         f"Let me solve this step by step.\n"
         f"Given: {var} = {old_val}\n"
         f"Expression: {expr_str}\n"
-        f"Substituting: "
+        f"Substituting {var} = {old_val}: the result is {old_result}.\n"
+        f"The answer is {old_result}."
     )
     correction = f"Actually, {var} = {new_val}, not {old_val}. Please recalculate."
     revised = (
-        f"Let me recalculate with the corrected value.\n"
-        f"Given: {var} = {new_val}\n"
+        f"{_ack()}. With {var} = {new_val}:\n"
         f"Expression: {expr_str}\n"
         f"Substituting {var} = {new_val}: the result is {new_result}.\n"
         f"The answer is {new_result}."
@@ -164,7 +190,7 @@ def generate_arithmetic_correction() -> dict[str, Any]:
     )
     correction = f"Wait, the first number should be {a_new}, not {a}."
     revised = (
-        f"Let me recalculate with {a_new} instead.\n"
+        f"{_ack()}. With {a_new} instead of {a}:\n"
         f"{a_new} {op_sym} {b} = {new_result}.\n"
         f"The {op_name} is {new_result}."
     )
@@ -193,6 +219,7 @@ def generate_profile_update() -> dict[str, Any]:
     new_profession = random.choice([p for p in PROFESSIONS if p != profession])
     hobby = random.choice(HOBBIES)
     city = random.choice(CITIES)
+    new_city = random.choice([c for c in CITIES if c != city])
 
     prompt = (
         f"Create a brief profile for {name}: age {old_age}, "
@@ -206,14 +233,14 @@ def generate_profile_update() -> dict[str, Any]:
         f"Hobby: {hobby}\n"
         f"{name} is a {old_age}-year-old {profession} living in {city}."
     )
-    correction = f"Update: {name} is actually {new_age} and works as a {new_profession}."
+    correction = f"Update: {name} is actually {new_age}, works as a {new_profession}, and lives in {new_city}."
     revised = (
-        f"Updated Profile: {name}\n"
+        f"{_ack()}. Updated profile for {name}:\n"
         f"Age: {new_age}\n"
         f"Profession: {new_profession}\n"
-        f"Location: {city}\n"
+        f"Location: {new_city}\n"
         f"Hobby: {hobby}\n"
-        f"{name} is a {new_age}-year-old {new_profession} living in {city}."
+        f"{name} is a {new_age}-year-old {new_profession} living in {new_city}."
     )
 
     return {
@@ -238,10 +265,12 @@ def generate_topic_redirect() -> dict[str, Any]:
     partial_response = (
         f"{topic1.title()} is a rapidly evolving field that has seen significant "
         f"advancements in recent years. Researchers and practitioners in {topic1} "
-        f"are working on solutions that could transform"
+        f"are working on solutions that could transform how we approach problems "
+        f"in this domain."
     )
-    correction = f"Actually, I'd like you to write about {topic2} instead."
+    correction = f"Actually, I'd like you to write about {topic2} instead of {topic1}."
     revised = (
+        f"{_ack()}. Switching to {topic2}.\n\n"
         f"{topic2.title()} is a rapidly evolving field that has seen significant "
         f"advancements in recent years. Researchers and practitioners in {topic2} "
         f"are exploring innovative approaches that promise to reshape how we "
@@ -276,9 +305,9 @@ def generate_constraint_revision() -> dict[str, Any]:
     )
     correction = f"Actually, my budget is only ${new_budget} and I need just {new_count} items."
     revised = (
-        f"Here are {new_count} items you can buy with ${new_budget}:\n"
+        f"{_ack()}. With a ${new_budget} budget, here are {new_count} items:\n"
         + "\n".join(
-            f"{i+1}. A budget-friendly option"
+            f"{i+1}. A budget-friendly option under ${new_budget // max(1, new_count)}"
             for i in range(new_count)
         )
     )
@@ -301,12 +330,23 @@ def generate_language_switch() -> dict[str, Any]:
     lang2 = random.choice([l for l in LANGUAGES if l != lang1])
 
     prompt = f"Write a simple hello world function in {lang1}."
-    partial_response = f"Here's a hello world function in {lang1}:\n\n```{lang1.lower()}\n"
-    correction = f"Actually, please write it in {lang2} instead."
+    partial_response = (
+        f"Here's a hello world function in {lang1}:\n\n"
+        f"```{lang1.lower()}\n"
+        f"// Hello World in {lang1}\n"
+        f"function hello() {{\n"
+        f"  print(\"Hello, World!\")\n"
+        f"}}\n"
+        f"```"
+    )
+    correction = f"Actually, please write it in {lang2} instead of {lang1}."
     revised = (
-        f"Here's the hello world function in {lang2}:\n\n"
+        f"{_ack()}. Here's the hello world function in {lang2} instead:\n\n"
         f"```{lang2.lower()}\n"
         f"// Hello World in {lang2}\n"
+        f"function hello() {{\n"
+        f"  print(\"Hello, World!\")\n"
+        f"}}\n"
         f"```\n"
         f"This is a basic hello world implementation in {lang2}."
     )

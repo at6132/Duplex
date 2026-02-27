@@ -39,7 +39,7 @@ def load_vanilla_qwen(model_path: str, quantize: bool = True):
 def load_duplex_model(
     qwen_path: str,
     checkpoint_path: str,
-    quantize: bool = True,
+    quantize: bool = False,
 ) -> DuplexModel:
     """Load a trained Duplex-1-1.7B model."""
     config = DuplexConfig(qwen_model_path=qwen_path, quantize_4bit=quantize)
@@ -115,3 +115,62 @@ def generate_vanilla_with_restart(
     restarted_text = tokenizer.decode(restarted_out[0], skip_special_tokens=True)
 
     return partial_text, restarted_text
+
+
+# Shown in baseline stream when we "stop" and inject correction
+BASELINE_STOP_MSG = (
+    "\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "  ⏹  STOPPED  ·  Correction received  ·  Restarting from scratch…\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+)
+
+
+def generate_vanilla_with_restart_streaming(
+    model,
+    tokenizer,
+    prompt: str,
+    correction: str,
+    tokens_before_correction: int = 30,
+    max_new_tokens: int = 200,
+    temperature: float = 0.7,
+):
+    """Stream baseline: partial → stop message → restarted response. Yields full baseline text so far."""
+    device = next(model.parameters()).device
+    enc = tokenizer(prompt, return_tensors="pt").to(device)
+    input_ids = enc["input_ids"]
+
+    for _ in range(tokens_before_correction):
+        out = model.generate(
+            input_ids,
+            max_new_tokens=1,
+            temperature=temperature,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        input_ids = out
+        text = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+        yield text
+
+    text_after_partial = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+    yield text_after_partial + BASELINE_STOP_MSG
+
+    corrected_prompt = f"{prompt}\n\n[User correction: {correction}]\n\nPlease respond with the correction in mind:\n"
+    enc2 = tokenizer(corrected_prompt, return_tensors="pt").to(device)
+    input_ids = enc2["input_ids"]
+    prompt_len = input_ids.shape[1]
+
+    for _ in range(max_new_tokens - 1):
+        out = model.generate(
+            input_ids,
+            max_new_tokens=1,
+            temperature=temperature,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        input_ids = out
+        restarted_only = tokenizer.decode(input_ids[0][prompt_len:], skip_special_tokens=True)
+        combined = text_after_partial + BASELINE_STOP_MSG + restarted_only
+        yield combined
+        if out[0, -1].item() == tokenizer.eos_token_id:
+            break

@@ -35,13 +35,13 @@ class DuplexConfig:
 
 @dataclass
 class TrainingConfig:
-    # H200-optimized defaults: batch 64 per GPU × 2 GPUs × grad_accum 2 = 256 effective
+    # H200-optimized defaults: batch 64 per GPU x 2 GPUs x grad_accum 2 = 256 effective
     batch_size: int = 64
     gradient_accumulation_steps: int = 2
-    learning_rate: float = 2e-4      # scaled up for larger effective batch
+    learning_rate: float = 3e-4      # higher LR for the harder task
     weight_decay: float = 0.01
     max_steps: int = 100000
-    warmup_steps: int = 5000
+    warmup_steps: int = 3000
     log_every: int = 25
     eval_every: int = 1000
     save_every: int = 5000
@@ -49,7 +49,7 @@ class TrainingConfig:
     phase: int = 1
     grad_clip: float = 1.0
     seed: int = 42
-    max_seq_len: int = 512
+    max_seq_len: int = 384
 
     # DDP (set automatically by train.py)
     use_ddp: bool = False

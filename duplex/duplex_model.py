@@ -214,6 +214,66 @@ class DuplexModel(nn.Module):
         full_text = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
         return full_text, text_at_correction
 
+    # Shown in stream the moment Duplex receives the mid-stream correction (no restart)
+    INJECTION_VISUAL = (
+        "\n\n"
+        "╔══════════════════════════════════════════════════════════════╗\n"
+        "║  🔄 DUPLEX RECEIVING INJECTION  —  Workspace updating now   ║\n"
+        "║     (No stop. No restart. Continuing with new information.) ║\n"
+        "╚══════════════════════════════════════════════════════════════╝\n\n"
+    )
+
+    @torch.no_grad()
+    def generate_with_update_streaming(
+        self,
+        prompt_text: str,
+        max_new_tokens: int = 200,
+        temperature: float = 0.7,
+        correction_text: str | None = None,
+        correction_after_tokens: int | None = None,
+    ):
+        """Stream generation; at correction step yield INJECTION_VISUAL then continue. Yields full text so far."""
+        self.eval()
+        device = next(self.qwen.parameters()).device
+
+        prompt_enc = self.tokenizer(prompt_text, return_tensors="pt").to(device)
+        ws = self._encode_and_update_workspace(
+            prompt_enc["input_ids"], prompt_enc["attention_mask"]
+        )
+        correction_enc = None
+        if correction_text and correction_after_tokens is not None:
+            correction_enc = self.tokenizer(correction_text, return_tensors="pt").to(device)
+
+        self._current_workspace = ws
+        generated_ids = prompt_enc["input_ids"].clone()
+
+        for step in range(max_new_tokens):
+            if (correction_enc is not None
+                    and correction_after_tokens is not None
+                    and step == correction_after_tokens):
+                text_so_far = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+                yield text_so_far + self.INJECTION_VISUAL
+                ws = self._encode_and_update_workspace(
+                    correction_enc["input_ids"],
+                    correction_enc["attention_mask"],
+                    workspace=ws,
+                )
+                self._current_workspace = ws
+
+            outputs = self.qwen(input_ids=generated_ids)
+            next_logits = outputs.logits[:, -1, :] / max(temperature, 1e-5)
+            probs = F.softmax(next_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            generated_ids = torch.cat([generated_ids, next_token], dim=1)
+
+            full = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+            yield full
+
+            if next_token.item() == self.tokenizer.eos_token_id:
+                break
+
+        self._current_workspace = None
+
     def get_trainable_params(self) -> list[nn.Parameter]:
         params = []
         params.extend(self.encoder.parameters())
