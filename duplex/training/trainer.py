@@ -8,6 +8,9 @@ Supports:
   - Pinned memory + prefetch DataLoader workers
   - Cosine LR schedule with linear warmup
   - Gradient accumulation + clipping
+  - Convergence detection (auto-stop on plateau)
+  - Best checkpoint saving (val_loss)
+  - Graceful save on Ctrl+C / SIGTERM
   - Only rank-0 saves checkpoints and prints logs
 """
 
@@ -36,7 +39,6 @@ class DuplexTrainer:
         self.world_size = config.world_size
         self.is_main = (self.local_rank <= 0)
 
-        # Wrap in DDP if using multiple GPUs
         if self.is_ddp:
             self.model = DDP(
                 model,
@@ -56,24 +58,21 @@ class DuplexTrainer:
             trainable_params,
             lr=config.learning_rate,
             weight_decay=config.weight_decay,
-            fused=True,  # fused AdamW kernel — faster on H200
+            fused=torch.cuda.is_available(),
         )
 
         self.global_step = 0
         self.log_history: list[dict] = []
         self._stop_requested = False
 
-        # Save on Ctrl+C / SIGTERM instead of dying with no checkpoint
         if self.is_main:
             signal.signal(signal.SIGINT, self._handle_signal)
             signal.signal(signal.SIGTERM, self._handle_signal)
-
-        if self.is_main:
             self.raw_model.print_param_summary()
 
     def _handle_signal(self, signum, frame):
         if self.is_main:
-            print(f"\nSignal {signum} received — saving checkpoint before exit...")
+            print(f"\nSignal {signum} received -- saving checkpoint before exit...")
         self._stop_requested = True
 
     def _get_lr(self, step: int) -> float:
@@ -125,7 +124,6 @@ class DuplexTrainer:
             total_loss += out["loss"].item()
             n += 1
 
-        # Average across all DDP ranks
         avg = total_loss / max(1, n)
         if self.is_ddp:
             t = torch.tensor(avg, device=self.device)
@@ -195,17 +193,26 @@ class DuplexTrainer:
         )
 
         ckpt_dir = self.config.checkpoint_dir
+        phase = self.config.phase
         if self.is_main:
             os.makedirs(ckpt_dir, exist_ok=True)
             eff_batch = (self.config.batch_size
                          * self.config.gradient_accumulation_steps
                          * self.world_size)
-            print(f"\nTraining Duplex-1-1.7B | Phase {self.config.phase}")
-            print(f"GPUs: {self.world_size} | Batch/GPU: {self.config.batch_size} | "
+            print(f"\n{'='*60}")
+            print(f"  Training Duplex-1-1.7B | Phase {phase}")
+            print(f"{'='*60}")
+            print(f"  GPUs: {self.world_size} | Batch/GPU: {self.config.batch_size} | "
                   f"Grad accum: {self.config.gradient_accumulation_steps} | "
                   f"Effective batch: {eff_batch}")
-            print(f"Max steps: {self.config.max_steps} | Warmup: {self.config.warmup_steps}")
-            print(f"Train: {len(train_dataset):,} | Val: {len(val_dataset):,}\n")
+            print(f"  Max steps: {self.config.max_steps} | Warmup: {self.config.warmup_steps}")
+            print(f"  LR: {self.config.learning_rate} | Grad clip: {self.config.grad_clip}")
+            print(f"  Train: {len(train_dataset):,} | Val: {len(val_dataset):,}")
+            if phase == 1:
+                print(f"  Phase 1: Learning workspace-conditioned generation (prompt -> response)")
+            else:
+                print(f"  Phase 2: Learning mid-stream correction (wrong context + workspace -> revised)")
+            print(f"{'='*60}\n")
 
         t_start = time.time()
         running_loss = 0.0
@@ -213,12 +220,16 @@ class DuplexTrainer:
         accum_count = 0
         epoch = 0
 
-        # Convergence detection: stop if loss doesn't improve by min_delta
-        # for patience consecutive log intervals
-        best_loss = float("inf")
-        patience = 10
-        patience_counter = 0
-        min_delta = 1e-4
+        # Convergence: track a smoothed loss (EMA) for stable plateau detection
+        ema_loss = None
+        ema_alpha = 0.1
+        best_ema = float("inf")
+        plateau_patience = 15       # log intervals with no improvement
+        plateau_counter = 0
+        plateau_min_delta = 5e-4    # must improve by at least this
+
+        # Best checkpoint tracking (based on val_loss)
+        best_val_loss = float("inf")
 
         self.optimizer.zero_grad()
 
@@ -270,14 +281,20 @@ class DuplexTrainer:
                             f"{tokens_per_sec/1000:.1f}k tok/s"
                         )
 
-                        # Convergence check
-                        if avg_loss < best_loss - min_delta:
-                            best_loss = avg_loss
-                            patience_counter = 0
+                        # EMA-based convergence detection (much more stable than raw loss)
+                        if ema_loss is None:
+                            ema_loss = avg_loss
                         else:
-                            patience_counter += 1
-                            if patience_counter >= patience:
-                                print(f"\nConverged — loss flat for {patience} log intervals. Stopping.")
+                            ema_loss = ema_alpha * avg_loss + (1 - ema_alpha) * ema_loss
+
+                        if ema_loss < best_ema - plateau_min_delta:
+                            best_ema = ema_loss
+                            plateau_counter = 0
+                        else:
+                            plateau_counter += 1
+                            if plateau_counter >= plateau_patience:
+                                print(f"\nConverged -- EMA loss flat for {plateau_patience} "
+                                      f"log intervals (EMA={ema_loss:.5f}). Stopping.")
                                 self._stop_requested = True
 
                         running_loss = 0.0
@@ -291,6 +308,12 @@ class DuplexTrainer:
                                 "step": self.global_step,
                                 "val_loss": val_loss,
                             })
+                            # Save best checkpoint
+                            if val_loss < best_val_loss:
+                                best_val_loss = val_loss
+                                best_path = os.path.join(ckpt_dir, f"phase{phase}_best.pt")
+                                self.save_checkpoint(best_path)
+                                print(f"  >> New best val_loss={val_loss:.4f} -> saved {best_path}")
 
                     if self.global_step % self.config.save_every == 0:
                         path = os.path.join(ckpt_dir, f"step_{self.global_step}.pt")
@@ -298,10 +321,24 @@ class DuplexTrainer:
                         if self.is_main:
                             print(f"  >> Saved: {path}")
 
-        final_path = os.path.join(ckpt_dir, "final.pt")
+        # Always save final checkpoint
+        final_path = os.path.join(ckpt_dir, f"phase{phase}_final.pt")
         self.save_checkpoint(final_path)
+        # Also save as generic final.pt for convenience
+        generic_final = os.path.join(ckpt_dir, "final.pt")
+        self.save_checkpoint(generic_final)
+
         if self.is_main:
-            print(f"\nTraining complete. Final: {final_path}")
+            elapsed = time.time() - t_start
+            print(f"\n{'='*60}")
+            print(f"  Phase {phase} complete")
+            print(f"  Steps: {self.global_step:,} | Time: {elapsed/60:.1f}min")
+            print(f"  Best val_loss: {best_val_loss:.4f}")
+            print(f"  Checkpoints: {final_path}, {generic_final}")
+            if best_val_loss < float("inf"):
+                print(f"  Best checkpoint: {os.path.join(ckpt_dir, f'phase{phase}_best.pt')}")
+            print(f"{'='*60}\n")
+
             log_path = os.path.join(ckpt_dir, "training_log.json")
             with open(log_path, "w") as f:
                 json.dump(self.log_history, f, indent=2)
