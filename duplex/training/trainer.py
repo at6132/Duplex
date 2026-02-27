@@ -184,7 +184,7 @@ class DuplexTrainer:
         )
         val_loader = DataLoader(
             val_dataset,
-            batch_size=self.config.batch_size * 2,
+            batch_size=max(1, self.config.batch_size // 4),
             sampler=val_sampler,
             shuffle=False,
             collate_fn=DuplexDataset.collate_fn,
