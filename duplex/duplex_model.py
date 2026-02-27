@@ -89,7 +89,8 @@ class DuplexModel(nn.Module):
         if compile_modules:
             self.encoder = torch.compile(self.encoder)
             self.workspace = torch.compile(self.workspace)
-            self.adapters = torch.compile(self.adapters)
+            # Compile each adapter individually so ModuleList stays subscriptable
+            self.adapters = nn.ModuleList([torch.compile(a) for a in self.adapters])
 
         self._inject_adapters()
         self._current_workspace: torch.Tensor | None = None
