@@ -12,6 +12,7 @@ Supports:
 """
 
 import os
+import signal
 import time
 import json
 import math
@@ -60,9 +61,20 @@ class DuplexTrainer:
 
         self.global_step = 0
         self.log_history: list[dict] = []
+        self._stop_requested = False
+
+        # Save on Ctrl+C / SIGTERM instead of dying with no checkpoint
+        if self.is_main:
+            signal.signal(signal.SIGINT, self._handle_signal)
+            signal.signal(signal.SIGTERM, self._handle_signal)
 
         if self.is_main:
             self.raw_model.print_param_summary()
+
+    def _handle_signal(self, signum, frame):
+        if self.is_main:
+            print(f"\nSignal {signum} received — saving checkpoint before exit...")
+        self._stop_requested = True
 
     def _get_lr(self, step: int) -> float:
         if step < self.config.warmup_steps:
@@ -201,15 +213,22 @@ class DuplexTrainer:
         accum_count = 0
         epoch = 0
 
+        # Convergence detection: stop if loss doesn't improve by min_delta
+        # for patience consecutive log intervals
+        best_loss = float("inf")
+        patience = 10
+        patience_counter = 0
+        min_delta = 1e-4
+
         self.optimizer.zero_grad()
 
-        while self.global_step < self.config.max_steps:
+        while self.global_step < self.config.max_steps and not self._stop_requested:
             epoch += 1
             if self.is_ddp:
                 train_sampler.set_epoch(epoch)
 
             for batch in train_loader:
-                if self.global_step >= self.config.max_steps:
+                if self.global_step >= self.config.max_steps or self._stop_requested:
                     break
 
                 self._set_lr(self._get_lr(self.global_step))
@@ -250,6 +269,17 @@ class DuplexTrainer:
                             f"lr: {lr:.2e} | {steps_per_sec:.2f} steps/s | "
                             f"{tokens_per_sec/1000:.1f}k tok/s"
                         )
+
+                        # Convergence check
+                        if avg_loss < best_loss - min_delta:
+                            best_loss = avg_loss
+                            patience_counter = 0
+                        else:
+                            patience_counter += 1
+                            if patience_counter >= patience:
+                                print(f"\nConverged — loss flat for {patience} log intervals. Stopping.")
+                                self._stop_requested = True
+
                         running_loss = 0.0
                         n_accumulated = 0
 
