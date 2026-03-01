@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from duplex.config import DuplexConfig
 from duplex.duplex_model import DuplexModel
 
-CKPT = "checkpoints/duplex-1-1.7b/phase2_best.pt"
+CKPT = "checkpoints/duplex-1.1-1.7b/phase2_best.pt"
 QWEN = "models/qwen3-1.7b-base"
 
 

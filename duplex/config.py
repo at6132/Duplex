@@ -51,7 +51,7 @@ class TrainingConfig:
     log_every: int = 25
     eval_every: int = 1000
     save_every: int = 5000
-    checkpoint_dir: str = "checkpoints/duplex-1-1.7b"
+    checkpoint_dir: str = "checkpoints/duplex-1.1-1.7b"
     phase: int = 1
     grad_clip: float = 1.0
     seed: int = 42

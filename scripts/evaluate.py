@@ -1,9 +1,9 @@
 """
-Evaluation script for Duplex-1-1.7B vs vanilla Qwen3-1.7B.
+Evaluation script for Duplex-1.1-1.7B vs vanilla Qwen3-1.7B.
 
 Usage:
     python scripts/evaluate.py \
-        --duplex_ckpt checkpoints/duplex-1-1.7b/final.pt \
+        --duplex_ckpt checkpoints/duplex-1.1-1.7b/final.pt \
         --n_samples 200
 """
 
@@ -133,14 +133,14 @@ def main():
             if line.strip():
                 samples.append(json.loads(line))
 
-    print("Loading Duplex-1-1.7B...")
+    print("Loading Duplex-1.1-1.7B...")
     model = load_duplex_model(args.qwen_path, args.duplex_ckpt)
 
     print(f"\nEvaluating on {min(args.n_samples, len(samples))} samples\n")
     metrics = run_duplex_eval(model, samples, args.n_samples)
 
     print(f"\n{'='*50}")
-    print(f"  Duplex-1-1.7B Results")
+    print(f"  Duplex-1.1-1.7B Results")
     print(f"{'='*50}")
     print(f"  Revision Accuracy:  {metrics['revision_accuracy']:.1%}")
     print(f"  Contradiction Rate: {metrics['contradiction_rate']:.1%}")

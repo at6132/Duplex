@@ -44,10 +44,10 @@ SCENARIOS = [
 
 def main():
     qwen_path = "models/qwen3-1.7b-base"
-    ckpt_path = "checkpoints/duplex-1-1.7b/phase2_best.pt"
+    ckpt_path = "checkpoints/duplex-1.1-1.7b/phase2_best.pt"
 
     if not os.path.exists(ckpt_path):
-        ckpt_path = "checkpoints/duplex-1-1.7b/final.pt"
+        ckpt_path = "checkpoints/duplex-1.1-1.7b/final.pt"
     if not os.path.exists(qwen_path):
         print(f"ERROR: {qwen_path} not found.")
         return

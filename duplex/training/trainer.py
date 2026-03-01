@@ -206,7 +206,7 @@ class DuplexTrainer:
                          * self.config.gradient_accumulation_steps
                          * self.world_size)
             print(f"\n{'='*60}")
-            print(f"  Training Duplex-1-1.7B | Phase {phase}")
+            print(f"  Training Duplex-1.1-1.7B | Phase {phase}")
             print(f"{'='*60}")
             print(f"  GPUs: {self.world_size} | Batch/GPU: {self.config.batch_size} | "
                   f"Grad accum: {self.config.gradient_accumulation_steps} | "

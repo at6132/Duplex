@@ -1,8 +1,8 @@
 """
-Investor demo: side-by-side streaming comparison of vanilla Qwen vs Duplex-1-1.7B.
+Investor demo: side-by-side streaming comparison of vanilla Qwen vs Duplex-1.1-1.7B.
 
 Usage:
-    python scripts/demo.py --duplex_ckpt checkpoints/duplex-1-1.7b/final.pt
+    python scripts/demo.py --duplex_ckpt checkpoints/duplex-1.1-1.7b/final.pt
 """
 
 import argparse
@@ -44,7 +44,7 @@ def main():
     print("Loading vanilla Qwen3-1.7B (baseline)...")
     qwen_model, qwen_tokenizer = load_vanilla_qwen(args.qwen_path, quantize=False)
 
-    print("Loading Duplex-1-1.7B...")
+    print("Loading Duplex-1.1-1.7B...")
     duplex_model = load_duplex_model(args.qwen_path, args.duplex_ckpt)
     print("Models loaded.\n")
 
@@ -195,7 +195,7 @@ def main():
         # Header
         gr.HTML("""
         <div style="text-align:center; padding: 20px 0 10px 0;">
-            <h1 style="font-size:2.2rem; margin:0;">Duplex-1-1.7B</h1>
+            <h1 style="font-size:2.2rem; margin:0;">Duplex-1.1-1.7B</h1>
             <p style="color:#aaa; font-size:1rem; margin:6px 0 0 0;">
                 Full-Duplex Language Model &mdash; accepts corrections mid-generation without restarting
             </p>
@@ -266,7 +266,7 @@ def main():
                 )
 
             with gr.Column():
-                gr.HTML('<div style="font-weight:600; color:#4ade80; font-size:1.05rem; margin-bottom:4px;">Duplex-1-1.7B (Full-Duplex)</div>')
+                gr.HTML('<div style="font-weight:600; color:#4ade80; font-size:1.05rem; margin-bottom:4px;">Duplex-1.1-1.7B (Full-Duplex)</div>')
                 duplex_output = gr.Textbox(
                     label="",
                     lines=18,

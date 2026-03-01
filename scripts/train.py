@@ -1,5 +1,5 @@
 """
-Training CLI for Duplex-1-1.7B v2.
+Training CLI for Duplex-1.1-1.7B v2.
 
 Single GPU:
     python scripts/train.py --phase 1
@@ -8,7 +8,7 @@ Multi-GPU (both H200s):
     torchrun --nproc_per_node=2 scripts/train.py --phase 1
 
 Resume Phase 2:
-    torchrun --nproc_per_node=2 scripts/train.py --phase 2 --resume checkpoints/duplex-1-1.7b/phase1_best.pt
+    torchrun --nproc_per_node=2 scripts/train.py --phase 2 --resume checkpoints/duplex-1.1-1.7b/phase1_best.pt
 """
 
 import argparse
@@ -39,14 +39,14 @@ def main():
     is_ddp, local_rank, world_size = setup_ddp()
     is_main = local_rank <= 0
 
-    parser = argparse.ArgumentParser(description="Train Duplex-1-1.7B v2")
+    parser = argparse.ArgumentParser(description="Train Duplex-1.1-1.7B v2")
     parser.add_argument("--phase", type=int, default=1, choices=[1, 2])
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--grad_accum", type=int, default=None)
     parser.add_argument("--learning_rate", type=float, default=None)
     parser.add_argument("--data_dir", type=str, default="generated_data_duplex")
-    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/duplex-1-1.7b")
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/duplex-1.1-1.7b")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--qwen_path", type=str, default="models/qwen3-1.7b-base")
     parser.add_argument("--seed", type=int, default=42)
@@ -77,7 +77,7 @@ def main():
         train_config.learning_rate = args.learning_rate
 
     if is_main:
-        print("Loading Duplex-1-1.7B v2...")
+        print("Loading Duplex-1.1-1.7B v2...")
     model = DuplexModel(duplex_config, local_rank=local_rank)
 
     train_path = os.path.join(args.data_dir, "train.jsonl")

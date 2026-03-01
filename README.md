@@ -1,18 +1,18 @@
-# Duplex-1-1.7B: Full-Duplex Language Model
+# Duplex-1.1-1.7B: Full-Duplex Language Model
 
 A language model that can **accept input while it's outputting** -- built by adding workspace adapter layers to a frozen Qwen3-1.7B-Base.
 
 ## Model Naming
 
 Following standard LLM conventions:
-- **Duplex-1-1.7B** -- first generation, 1.7B base size
+- **Duplex-1.1-1.7B** -- first generation v1.1, 1.7B base size
 - Future: Duplex-1-4B, Duplex-1-8B, Duplex-2-X, etc.
 
 ## Architecture
 
 **Baseline (Qwen3-1.7B):** Standard decoder-only transformer. Half-duplex -- you either provide input or get output, never both at once. To correct the model mid-response, you must stop it, re-prompt, and restart.
 
-**Duplex-1-1.7B:** Same Qwen3-1.7B backbone (frozen), plus three new trainable components:
+**Duplex-1.1-1.7B:** Same Qwen3-1.7B backbone (frozen), plus three new trainable components:
 - **Update Encoder** (4-layer bidirectional transformer): encodes prompt/correction text
 - **Workspace Module** (32 learnable slots x 2048 dim): persistent latent state with gated updates
 - **Cross-Attention Adapters** (one per decoder layer, zero-initialized): let the decoder condition on the workspace
@@ -55,17 +55,17 @@ python scripts/generate_data.py
 ### 2. Train (Phase 1: basic, Phase 2: with corrections)
 ```bash
 python scripts/train.py --phase 1 --max_steps 10000
-python scripts/train.py --phase 2 --max_steps 20000 --resume checkpoints/duplex-1-1.7b/step_10000.pt
+python scripts/train.py --phase 2 --max_steps 20000 --resume checkpoints/duplex-1.1-1.7b/step_10000.pt
 ```
 
 ### 3. Evaluate
 ```bash
-python scripts/evaluate.py --duplex_ckpt checkpoints/duplex-1-1.7b/final.pt --n_samples 200 --ablation
+python scripts/evaluate.py --duplex_ckpt checkpoints/duplex-1.1-1.7b/final.pt --n_samples 200 --ablation
 ```
 
 ### 4. Demo (side-by-side: Qwen vs Duplex)
 ```bash
-python scripts/demo.py --duplex_ckpt checkpoints/duplex-1-1.7b/final.pt
+python scripts/demo.py --duplex_ckpt checkpoints/duplex-1.1-1.7b/final.pt
 ```
 
 ## Project Structure
@@ -95,4 +95,4 @@ CONCEPT1/                  -- Original toy prototype (proof of concept)
 
 ## Prior Work (CONCEPT1)
 
-The toy prototype in `CONCEPT1/` validated the core idea at small scale (2M baseline vs 5M workspace model). Key ablation result: disabling the workspace update dropped revision accuracy from 55% to 4.4% and raised contradiction rate from 3.6% to 40.2%. This confirmed the full-duplex mechanism works and justified scaling to Duplex-1-1.7B.
+The toy prototype in `CONCEPT1/` validated the core idea at small scale (2M baseline vs 5M workspace model). Key ablation result: disabling the workspace update dropped revision accuracy from 55% to 4.4% and raised contradiction rate from 3.6% to 40.2%. This confirmed the full-duplex mechanism works and justified scaling to Duplex-1.1-1.7B.

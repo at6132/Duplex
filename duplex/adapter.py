@@ -7,7 +7,8 @@ Path 2: per-token correction states (T_corr x D) — entity-level detail
 KV = concat(workspace_slots, correction_token_states) when correction is
 available, otherwise just workspace_slots.
 
-Output projection is zero-initialized so adapter is a no-op at start.
+Tanh gate (in DuplexModel) is zero-initialized so adapter is a no-op at start.
+o_proj uses standard init to keep gradient flow alive.
 """
 
 import math
@@ -40,7 +41,10 @@ class CrossAttentionAdapter(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-        nn.init.zeros_(self.o_proj.weight)
+        # NOTE: o_proj uses standard init (NOT zero).
+        # The tanh gate (initialized to 0 in DuplexModel) is the sole zero-init,
+        # which is enough to preserve Qwen's output at the start.
+        # Zero-initializing BOTH kills all gradients: tanh(0)*0 = 0 everywhere.
 
     def forward(
         self,
