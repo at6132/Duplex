@@ -1,14 +1,22 @@
 """
-Synthetic correction task generators for Duplex-1 training.
+Synthetic correction task generators for Duplex-1 v2 training.
 
-Key design: partial_response must contain WRONG information that the correction
-fixes. The revised_continuation must explicitly acknowledge the correction and
-use the CORRECT information. This forces the model to depend on the workspace
-update to produce the right output.
+Key design principles:
+  1. partial_response contains WRONG info that the correction fixes
+  2. revised_continuation uses <|REVISE_START|>...<|REVISE_END|> to mark
+     exactly which span is being corrected, then continues with correct info
+  3. The corrected values from the correction text must appear VERBATIM
+     in the revision block so the model learns to copy from the workspace
+  4. Varied acknowledgment phrases prevent template memorization
 """
 
 import random
 from typing import Any
+
+from duplex.config import SPECIAL_TOKENS
+
+RS = SPECIAL_TOKENS["revise_start"]
+RE = SPECIAL_TOKENS["revise_end"]
 
 
 # =============================================================================
@@ -57,10 +65,7 @@ PROFESSIONS = [
 HOBBIES = [
     "reading", "swimming", "painting", "cooking", "cycling", "running",
     "chess", "gardening", "photography", "writing", "hiking", "yoga",
-    "dancing", "camping", "surfing", "knitting",
 ]
-
-COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "black", "white"]
 
 CITIES = [
     "New York", "London", "Paris", "Tokyo", "San Francisco",
@@ -70,27 +75,26 @@ CITIES = [
 
 LANGUAGES = ["Python", "JavaScript", "Rust", "Go", "TypeScript", "Java", "C++", "Ruby"]
 
-# Varied acknowledgment phrases so the model learns the general pattern, not a single template
-ACKNOWLEDGE_PHRASES = [
-    "Correcting that",
-    "Thanks for the correction",
-    "You're right, let me fix that",
-    "Updating my answer",
-    "I see, adjusting accordingly",
-    "Good catch, here's the corrected version",
-    "Noted, recalculating",
-    "Right, let me redo this",
-    "Understood, here's the updated answer",
-    "My mistake, correcting now",
+ACK_PHRASES = [
+    "Correcting that.",
+    "Thanks for the correction.",
+    "You're right, let me fix that.",
+    "Updating my answer.",
+    "Good catch.",
+    "Noted, correcting now.",
+    "Right, fixing that.",
+    "Understood, updating.",
+    "My mistake, here's the corrected version.",
+    "I see, adjusting accordingly.",
 ]
 
 
 def _ack() -> str:
-    return random.choice(ACKNOWLEDGE_PHRASES)
+    return random.choice(ACK_PHRASES)
 
 
 # =============================================================================
-# Task generators
+# Task generators — each returns dict with revision-annotated targets
 # =============================================================================
 
 def generate_fact_correction() -> dict[str, Any]:
@@ -105,7 +109,7 @@ def generate_fact_correction() -> dict[str, Any]:
     )
     correction = f"That's incorrect. The capital of {country} is actually {correct}, not {wrong}."
     revised = (
-        f"{_ack()}. The capital of {country} is {correct}, not {wrong}. "
+        f"{_ack()} {RS}The capital of {country} is {correct}.{RE} "
         f"While {wrong} is the largest city, {correct} is the official capital "
         f"and serves as the seat of government."
     )
@@ -140,7 +144,6 @@ def generate_variable_substitution() -> dict[str, Any]:
 
     prompt = f"Given {var} = {old_val}, compute {expr_str} step by step."
     partial_response = (
-        f"Let me solve this step by step.\n"
         f"Given: {var} = {old_val}\n"
         f"Expression: {expr_str}\n"
         f"Substituting {var} = {old_val}: the result is {old_result}.\n"
@@ -148,10 +151,9 @@ def generate_variable_substitution() -> dict[str, Any]:
     )
     correction = f"Actually, {var} = {new_val}, not {old_val}. Please recalculate."
     revised = (
-        f"{_ack()}. With {var} = {new_val}:\n"
-        f"Expression: {expr_str}\n"
-        f"Substituting {var} = {new_val}: the result is {new_result}.\n"
-        f"The answer is {new_result}."
+        f"{_ack()} {RS}Given: {var} = {new_val}\n"
+        f"Substituting {var} = {new_val} into {expr_str}: the result is {new_result}.\n"
+        f"The answer is {new_result}.{RE}"
     )
 
     return {
@@ -160,10 +162,7 @@ def generate_variable_substitution() -> dict[str, Any]:
         "correction": correction,
         "revised_continuation": revised,
         "task_type": "variable_substitution",
-        "expected_values": {
-            "correct_value": str(new_result),
-            "wrong_value": str(old_result),
-        },
+        "expected_values": {"correct_value": str(new_result), "wrong_value": str(old_result)},
     }
 
 
@@ -190,8 +189,7 @@ def generate_arithmetic_correction() -> dict[str, Any]:
     )
     correction = f"Wait, the first number should be {a_new}, not {a}."
     revised = (
-        f"{_ack()}. With {a_new} instead of {a}:\n"
-        f"{a_new} {op_sym} {b} = {new_result}.\n"
+        f"{_ack()} {RS}{a_new} {op_sym} {b} = {new_result}.{RE} "
         f"The {op_name} is {new_result}."
     )
 
@@ -201,10 +199,7 @@ def generate_arithmetic_correction() -> dict[str, Any]:
         "correction": correction,
         "revised_continuation": revised,
         "task_type": "arithmetic_correction",
-        "expected_values": {
-            "correct_value": str(new_result),
-            "wrong_value": str(old_result),
-        },
+        "expected_values": {"correct_value": str(new_result), "wrong_value": str(old_result)},
     }
 
 
@@ -235,11 +230,11 @@ def generate_profile_update() -> dict[str, Any]:
     )
     correction = f"Update: {name} is actually {new_age}, works as a {new_profession}, and lives in {new_city}."
     revised = (
-        f"{_ack()}. Updated profile for {name}:\n"
+        f"{_ack()} {RS}Profile: {name}\n"
         f"Age: {new_age}\n"
         f"Profession: {new_profession}\n"
         f"Location: {new_city}\n"
-        f"Hobby: {hobby}\n"
+        f"Hobby: {hobby}{RE}\n"
         f"{name} is a {new_age}-year-old {new_profession} living in {new_city}."
     )
 
@@ -270,9 +265,9 @@ def generate_topic_redirect() -> dict[str, Any]:
     )
     correction = f"Actually, I'd like you to write about {topic2} instead of {topic1}."
     revised = (
-        f"{_ack()}. Switching to {topic2}.\n\n"
-        f"{topic2.title()} is a rapidly evolving field that has seen significant "
-        f"advancements in recent years. Researchers and practitioners in {topic2} "
+        f"{_ack()} {RS}{topic2.title()} is a rapidly evolving field that has seen "
+        f"significant advancements in recent years.{RE} "
+        f"Researchers and practitioners in {topic2} "
         f"are exploring innovative approaches that promise to reshape how we "
         f"understand and interact with the world around us."
     )
@@ -283,10 +278,7 @@ def generate_topic_redirect() -> dict[str, Any]:
         "correction": correction,
         "revised_continuation": revised,
         "task_type": "topic_redirect",
-        "expected_values": {
-            "correct_value": topic2,
-            "wrong_value": topic1,
-        },
+        "expected_values": {"correct_value": topic2, "wrong_value": topic1},
     }
 
 
@@ -305,7 +297,7 @@ def generate_constraint_revision() -> dict[str, Any]:
     )
     correction = f"Actually, my budget is only ${new_budget} and I need just {new_count} items."
     revised = (
-        f"{_ack()}. With a ${new_budget} budget, here are {new_count} items:\n"
+        f"{_ack()} {RS}Here are {new_count} items you can buy with ${new_budget}:{RE}\n"
         + "\n".join(
             f"{i+1}. A budget-friendly option under ${new_budget // max(1, new_count)}"
             for i in range(new_count)
@@ -318,10 +310,7 @@ def generate_constraint_revision() -> dict[str, Any]:
         "correction": correction,
         "revised_continuation": revised,
         "task_type": "constraint_revision",
-        "expected_values": {
-            "correct_value": str(new_budget),
-            "wrong_value": str(old_budget),
-        },
+        "expected_values": {"correct_value": str(new_budget), "wrong_value": str(old_budget)},
     }
 
 
@@ -331,23 +320,13 @@ def generate_language_switch() -> dict[str, Any]:
 
     prompt = f"Write a simple hello world function in {lang1}."
     partial_response = (
-        f"Here's a hello world function in {lang1}:\n\n"
-        f"```{lang1.lower()}\n"
-        f"// Hello World in {lang1}\n"
-        f"function hello() {{\n"
-        f"  print(\"Hello, World!\")\n"
-        f"}}\n"
-        f"```"
+        f"Here's a hello world function in {lang1}:\n"
+        f"function hello() {{ print(\"Hello, World!\") }}"
     )
     correction = f"Actually, please write it in {lang2} instead of {lang1}."
     revised = (
-        f"{_ack()}. Here's the hello world function in {lang2} instead:\n\n"
-        f"```{lang2.lower()}\n"
-        f"// Hello World in {lang2}\n"
-        f"function hello() {{\n"
-        f"  print(\"Hello, World!\")\n"
-        f"}}\n"
-        f"```\n"
+        f"{_ack()} {RS}Here's the hello world function in {lang2}:\n"
+        f"function hello() {{ print(\"Hello, World!\") }}{RE}\n"
         f"This is a basic hello world implementation in {lang2}."
     )
 
@@ -357,10 +336,7 @@ def generate_language_switch() -> dict[str, Any]:
         "correction": correction,
         "revised_continuation": revised,
         "task_type": "language_switch",
-        "expected_values": {
-            "correct_value": lang2,
-            "wrong_value": lang1,
-        },
+        "expected_values": {"correct_value": lang2, "wrong_value": lang1},
     }
 
 

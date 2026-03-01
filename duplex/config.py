@@ -1,5 +1,12 @@
 from dataclasses import dataclass, field
 
+# Special tokens for retroactive revision
+SPECIAL_TOKENS = {
+    "revise_start": "<|REVISE_START|>",
+    "revise_end": "<|REVISE_END|>",
+    "insert": "<|INSERT|>",
+}
+
 
 @dataclass
 class DuplexConfig:
@@ -13,7 +20,7 @@ class DuplexConfig:
     vocab_size: int = 151936
     max_seq_len: int = 4096
 
-    # Workspace — more slots = richer latent memory
+    # Workspace (high-level context conditioning)
     n_workspace_slots: int = 32
     workspace_dim: int = 2048
 
@@ -30,15 +37,14 @@ class DuplexConfig:
 
     # Model paths & precision
     qwen_model_path: str = "models/qwen3-1.7b-base"
-    quantize_4bit: bool = False  # H200 has 282 GB VRAM — no quantization needed
+    quantize_4bit: bool = False
 
 
 @dataclass
 class TrainingConfig:
-    # H200-optimized defaults: batch 32 per GPU x 2 GPUs x grad_accum 4 = 256 effective
     batch_size: int = 32
     gradient_accumulation_steps: int = 4
-    learning_rate: float = 3e-4      # higher LR for the harder task
+    learning_rate: float = 3e-4
     weight_decay: float = 0.01
     max_steps: int = 100000
     warmup_steps: int = 3000
@@ -49,9 +55,9 @@ class TrainingConfig:
     phase: int = 1
     grad_clip: float = 1.0
     seed: int = 42
-    max_seq_len: int = 384
+    max_seq_len: int = 512
 
-    # DDP (set automatically by train.py)
+    # DDP
     use_ddp: bool = False
     world_size: int = 1
     local_rank: int = 0
@@ -64,5 +70,5 @@ class DataConfig:
     n_test_samples: int = 10000
     data_dir: str = "generated_data_duplex"
     max_prompt_len: int = 128
-    max_response_len: int = 256
-    max_correction_len: int = 64
+    max_response_len: int = 512
+    max_correction_len: int = 96

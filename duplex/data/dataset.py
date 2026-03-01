@@ -1,17 +1,11 @@
 """
-Dataset for Duplex-1 training.
+Dataset for Duplex-1 v2 training.
 
-CRITICAL DESIGN:
-  Phase 1: Decoder sees prompt, predicts partial_response. Workspace = encode(prompt).
-           This teaches the adapters to condition on the workspace.
-
-  Phase 2: Decoder sees prompt + WRONG partial_response (cut mid-sentence),
-           but labels = REVISED continuation. Workspace = encode(prompt) then
-           gated_update(correction). The model MUST read the workspace to know
-           what changed — the correction info is NOT in the decoder input.
-
-This eliminates the shortcut where the model ignores the workspace because
-the answer was already in the decoder input.
+Phase 1: Decoder sees prompt, predicts partial_response. Workspace = encode(prompt).
+Phase 2: Decoder sees prompt + WRONG partial (cut mid-sentence), labels = revision-
+         annotated continuation with <|REVISE_START|>...<|REVISE_END|> tokens.
+         Workspace = encode(prompt) + gated_update(correction).
+         Correction per-token states are passed alongside workspace to adapters.
 """
 
 import json
@@ -20,6 +14,8 @@ import torch
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
 
+from duplex.config import SPECIAL_TOKENS
+
 
 class DuplexDataset(Dataset):
     def __init__(
@@ -27,8 +23,8 @@ class DuplexDataset(Dataset):
         samples: list[dict],
         tokenizer: PreTrainedTokenizer,
         max_prompt_len: int = 128,
-        max_response_len: int = 384,
-        max_correction_len: int = 64,
+        max_response_len: int = 512,
+        max_correction_len: int = 96,
         phase: int = 2,
     ):
         self.samples = samples
@@ -41,13 +37,20 @@ class DuplexDataset(Dataset):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        # Ensure special tokens are registered
+        new_tokens = list(SPECIAL_TOKENS.values())
+        already = set(tokenizer.additional_special_tokens or [])
+        to_add = [t for t in new_tokens if t not in already]
+        if to_add:
+            tokenizer.add_special_tokens({"additional_special_tokens": list(already | set(to_add))})
+
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         s = self.samples[idx]
 
-        # --- Encoder: prompt ---
+        # Encoder input: prompt
         prompt_enc = self.tokenizer(
             s["prompt"],
             max_length=self.max_prompt_len,
@@ -57,7 +60,7 @@ class DuplexDataset(Dataset):
         )
 
         if self.phase == 1:
-            # Phase 1: no correction, predict partial_response from prompt
+            # Phase 1: no correction, predict partial_response
             update_enc = self.tokenizer(
                 "",
                 max_length=self.max_correction_len,
@@ -65,11 +68,10 @@ class DuplexDataset(Dataset):
                 truncation=True,
                 return_tensors="pt",
             )
-            # Decoder: prompt → partial_response
             full_text = s["prompt"] + " " + s["partial_response"]
             target_start_text = s["prompt"] + " "
         else:
-            # Phase 2: correction present, decoder sees WRONG context but must predict REVISED
+            # Phase 2: correction + revision-annotated target
             update_enc = self.tokenizer(
                 s.get("correction", ""),
                 max_length=self.max_correction_len,
@@ -78,13 +80,10 @@ class DuplexDataset(Dataset):
                 return_tensors="pt",
             )
 
-            # Decoder input = prompt + partial_response (the WRONG answer)
-            # Labels = only the revised_continuation part (the CORRECT answer)
-            # This forces the model to read the workspace to know what changed.
             partial = s.get("partial_response", "")
             revised = s.get("revised_continuation", "")
 
-            # Cut partial_response at a random point (30-80%) to simulate mid-generation
+            # Cut partial at a random point (30–80%) to simulate mid-generation
             if partial:
                 words = partial.split()
                 cut_frac = random.uniform(0.3, 0.8)
@@ -93,8 +92,8 @@ class DuplexDataset(Dataset):
             else:
                 partial_cut = ""
 
-            # Decoder sees: prompt + wrong_partial (cut) + revised_continuation
-            # But loss is ONLY on revised_continuation
+            # Decoder: prompt + wrong partial (cut) + revised continuation
+            # Loss is ONLY on revised continuation (which contains action tokens)
             full_text = s["prompt"] + " " + partial_cut + " " + revised
             target_start_text = s["prompt"] + " " + partial_cut + " "
 
@@ -106,7 +105,6 @@ class DuplexDataset(Dataset):
             return_tensors="pt",
         )
 
-        # Mask everything up to the target start (only compute loss on the target)
         prefix_enc = self.tokenizer(
             target_start_text,
             max_length=self.max_response_len,
@@ -149,8 +147,8 @@ class DuplexDataset(Dataset):
         path: str,
         tokenizer: PreTrainedTokenizer,
         max_prompt_len: int = 128,
-        max_response_len: int = 384,
-        max_correction_len: int = 64,
+        max_response_len: int = 512,
+        max_correction_len: int = 96,
         phase: int = 2,
     ) -> "DuplexDataset":
         samples = []

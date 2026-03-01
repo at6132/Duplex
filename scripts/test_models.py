@@ -1,9 +1,12 @@
-"""Quick CLI test: run a few scenarios through both models and print results."""
+"""Quick CLI test for Duplex v2: run scenarios and check if corrections work."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
 import torch
 from duplex.inference.generate import load_vanilla_qwen, load_duplex_model, generate_vanilla
+from duplex.renderer import render_final, strip_action_tokens
 
 SYSTEM = (
     "You are a helpful assistant. Answer the user's question directly and concisely. "
@@ -15,7 +18,7 @@ SCENARIOS = [
     {
         "name": "Fact correction",
         "prompt": "What is the capital of Australia? Explain briefly.",
-        "correction": "That's wrong — the capital is Canberra, not Sydney.",
+        "correction": "That's wrong -- the capital is Canberra, not Sydney.",
         "inject_after": 12,
     },
     {
@@ -41,21 +44,32 @@ SCENARIOS = [
 
 def main():
     qwen_path = "models/qwen3-1.7b-base"
-    ckpt_path = "checkpoints/duplex-1-1.7b/final.pt"
+    ckpt_path = "checkpoints/duplex-1-1.7b/phase2_best.pt"
 
+    if not os.path.exists(ckpt_path):
+        ckpt_path = "checkpoints/duplex-1-1.7b/final.pt"
     if not os.path.exists(qwen_path):
-        print(f"ERROR: {qwen_path} not found. Download Qwen first.")
+        print(f"ERROR: {qwen_path} not found.")
         return
     if not os.path.exists(ckpt_path):
-        print(f"ERROR: {ckpt_path} not found.")
+        print(f"ERROR: No checkpoint found.")
         return
 
     print("Loading vanilla Qwen...")
     qwen_model, qwen_tok = load_vanilla_qwen(qwen_path, quantize=False)
 
-    print("Loading Duplex...")
+    print("Loading Duplex v2...")
     duplex_model = load_duplex_model(qwen_path, ckpt_path)
     print("Both loaded.\n")
+
+    # Print gate values
+    print("Adapter gate values (tanh):")
+    for i, g in enumerate(duplex_model.adapter_gates):
+        if i < 3 or i >= 26:
+            print(f"  Layer {i:2d}: tanh(alpha) = {torch.tanh(g).item():.6f}")
+        elif i == 3:
+            print(f"  ...")
+    print()
 
     for s in SCENARIOS:
         prompt = SYSTEM + s["prompt"]
@@ -69,45 +83,35 @@ def main():
         print(f"  Inject at:  token {inject}")
         print("=" * 70)
 
-        # Vanilla: just answer the prompt (no correction — baseline behavior)
-        vanilla_out = generate_vanilla(qwen_model, qwen_tok, prompt, max_new_tokens=120, temperature=0.5)
-        # Strip system prompt from output
+        # Vanilla (no correction)
+        vanilla_out = generate_vanilla(qwen_model, qwen_tok, prompt, max_new_tokens=120, temperature=0.3)
         if vanilla_out.startswith(SYSTEM):
             vanilla_out = vanilla_out[len(SYSTEM):]
+        print(f"\n[VANILLA - no correction]\n{vanilla_out.strip()}")
 
-        print(f"\n[VANILLA — no correction]\n{vanilla_out.strip()}")
-
-        # Vanilla: answer with correction baked into prompt (restart simulation)
-        restart_prompt = f"{prompt}\n\n[User correction: {correction}]\n\nPlease respond with the correction in mind:\n"
-        vanilla_restart = generate_vanilla(qwen_model, qwen_tok, restart_prompt, max_new_tokens=120, temperature=0.5)
-        if vanilla_restart.startswith(restart_prompt):
-            vanilla_restart = vanilla_restart[len(restart_prompt):]
-
-        print(f"\n[VANILLA — restarted with correction]\n{vanilla_restart.strip()}")
-
-        # Duplex: mid-stream correction
-        duplex_out, at_correction = duplex_model.generate_with_update(
+        # Duplex with correction
+        duplex_raw, at_corr = duplex_model.generate_with_update(
             prompt_text=prompt,
             max_new_tokens=120,
-            temperature=0.5,
+            temperature=0.3,
             correction_text=correction,
             correction_after_tokens=inject,
         )
-        if duplex_out.startswith(SYSTEM):
-            duplex_out = duplex_out[len(SYSTEM):]
+        if duplex_raw.startswith(SYSTEM):
+            duplex_raw = duplex_raw[len(SYSTEM):]
+        duplex_rendered = render_final(duplex_raw)
+        print(f"\n[DUPLEX - with correction (raw)]\n{strip_action_tokens(duplex_raw).strip()}")
+        print(f"\n[DUPLEX - with correction (rendered)]\n{duplex_rendered.strip()}")
 
-        print(f"\n[DUPLEX — correction injected at token {inject}]\n{duplex_out.strip()}")
-
-        # Duplex: NO correction (ablation)
-        duplex_no_update, _ = duplex_model.generate_with_update(
+        # Duplex without correction (ablation)
+        duplex_no, _ = duplex_model.generate_with_update(
             prompt_text=prompt,
             max_new_tokens=120,
-            temperature=0.5,
+            temperature=0.3,
         )
-        if duplex_no_update.startswith(SYSTEM):
-            duplex_no_update = duplex_no_update[len(SYSTEM):]
-
-        print(f"\n[DUPLEX — no correction (ablation)]\n{duplex_no_update.strip()}")
+        if duplex_no.startswith(SYSTEM):
+            duplex_no = duplex_no[len(SYSTEM):]
+        print(f"\n[DUPLEX - no correction (ablation)]\n{strip_action_tokens(duplex_no).strip()}")
         print("\n")
 
 

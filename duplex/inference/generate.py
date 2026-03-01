@@ -1,35 +1,25 @@
 """
-Generation utilities for Duplex-1 and vanilla Qwen baseline comparison.
+Generation utilities for Duplex-1 v2 and vanilla Qwen baseline comparison.
 """
 
 import torch
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from duplex.duplex_model import DuplexModel
 from duplex.config import DuplexConfig
 
 
-def load_vanilla_qwen(model_path: str, quantize: bool = True):
-    """Load vanilla Qwen3-1.7B for baseline comparison."""
+def load_vanilla_qwen(model_path: str, quantize: bool = False):
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    quant_config = None
-    if quantize:
-        quant_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        )
-
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        quantization_config=quant_config,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
+        attn_implementation="sdpa",
         trust_remote_code=True,
     )
     model.eval()
@@ -39,16 +29,19 @@ def load_vanilla_qwen(model_path: str, quantize: bool = True):
 def load_duplex_model(
     qwen_path: str,
     checkpoint_path: str,
-    quantize: bool = False,
 ) -> DuplexModel:
-    """Load a trained Duplex-1-1.7B model."""
-    config = DuplexConfig(qwen_model_path=qwen_path, quantize_4bit=quantize)
+    config = DuplexConfig(qwen_model_path=qwen_path, quantize_4bit=False)
     model = DuplexModel(config)
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    model.encoder.load_state_dict(ckpt["encoder_state_dict"])
-    model.workspace.load_state_dict(ckpt["workspace_state_dict"])
-    model.adapters.load_state_dict(ckpt["adapters_state_dict"])
+    model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
+    model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
+    model.adapters.load_state_dict(ckpt["adapters_state_dict"], strict=False)
+    if "adapter_gates" in ckpt:
+        for i, g in enumerate(model.adapter_gates):
+            key = f"gate_{i}"
+            if key in ckpt["adapter_gates"]:
+                g.data.copy_(ckpt["adapter_gates"][key])
 
     model.eval()
     return model
@@ -62,7 +55,6 @@ def generate_vanilla(
     max_new_tokens: int = 200,
     temperature: float = 0.7,
 ) -> str:
-    """Standard autoregressive generation with vanilla Qwen."""
     enc = tokenizer(prompt, return_tensors="pt").to(model.device)
     out = model.generate(
         **enc,
@@ -84,15 +76,7 @@ def generate_vanilla_with_restart(
     max_new_tokens: int = 200,
     temperature: float = 0.7,
 ) -> tuple[str, str]:
-    """
-    Simulate baseline behavior: generate, then stop, re-prompt with correction, restart.
-
-    Returns:
-        (initial_partial_output, restarted_output_after_correction)
-    """
     enc = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    # Generate partial output
     partial_out = model.generate(
         **enc,
         max_new_tokens=tokens_before_correction,
@@ -102,7 +86,6 @@ def generate_vanilla_with_restart(
     )
     partial_text = tokenizer.decode(partial_out[0], skip_special_tokens=True)
 
-    # Restart with correction appended to prompt
     corrected_prompt = f"{prompt}\n\n[User correction: {correction}]\n\nPlease respond with the correction in mind:\n"
     enc2 = tokenizer(corrected_prompt, return_tensors="pt").to(model.device)
     restarted_out = model.generate(
@@ -117,12 +100,9 @@ def generate_vanilla_with_restart(
     return partial_text, restarted_text
 
 
-# Shown in baseline stream when we "stop" and inject correction
 BASELINE_STOP_MSG = (
     "\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "  ⏹  STOPPED  ·  Correction received  ·  Restarting from scratch…\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "=== STOPPED === Correction received === Restarting from scratch ===\n\n"
 )
 
 
@@ -135,7 +115,6 @@ def generate_vanilla_with_restart_streaming(
     max_new_tokens: int = 200,
     temperature: float = 0.7,
 ):
-    """Stream baseline: partial → stop message → restarted response. Yields full baseline text so far."""
     device = next(model.parameters()).device
     enc = tokenizer(prompt, return_tensors="pt").to(device)
     input_ids = enc["input_ids"]
