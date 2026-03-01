@@ -66,6 +66,13 @@ class DuplexModel(nn.Module):
         for param in self.qwen.parameters():
             param.requires_grad = False
 
+        # Unfreeze embed + lm_head for special tokens. The model must learn
+        # to generate <|REVISE_START|> etc. — their weights start random after
+        # resize and need gradient flow to become meaningful.
+        self.qwen.model.embed_tokens.weight.requires_grad = True
+        self.qwen.lm_head.weight.requires_grad = True
+        self._special_token_ids = [self.revise_start_id, self.revise_end_id, self.insert_id]
+
         # Encoder (processes prompt/correction text → per-token states)
         encoder_head_dim = config.encoder_dim // config.adapter_n_heads
         self.encoder = UpdateEncoder(
@@ -322,6 +329,8 @@ class DuplexModel(nn.Module):
         params = []
         params.extend(self.encoder.parameters())
         params.extend(self.workspace.parameters())
+        params.append(self.qwen.model.embed_tokens.weight)
+        params.append(self.qwen.lm_head.weight)
         return params
 
     def trainable_param_count(self) -> int:

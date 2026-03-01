@@ -138,6 +138,8 @@ class DuplexTrainer:
         torch.save({
             "encoder_state_dict": self.raw_model.encoder.state_dict(),
             "workspace_state_dict": self.raw_model.workspace.state_dict(),
+            "embed_weight": self.raw_model.qwen.model.embed_tokens.weight.data,
+            "lm_head_weight": self.raw_model.qwen.lm_head.weight.data,
             "optimizer_state_dict": self.optimizer.state_dict(),
             "global_step": self.global_step,
             "config": self.config,
@@ -147,6 +149,10 @@ class DuplexTrainer:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.raw_model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
         self.raw_model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
+        if "embed_weight" in ckpt:
+            self.raw_model.qwen.model.embed_tokens.weight.data.copy_(ckpt["embed_weight"])
+        if "lm_head_weight" in ckpt:
+            self.raw_model.qwen.lm_head.weight.data.copy_(ckpt["lm_head_weight"])
         try:
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         except (ValueError, KeyError):

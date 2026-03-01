@@ -36,6 +36,10 @@ def load_duplex_model(
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
     model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
+    if "embed_weight" in ckpt:
+        model.qwen.model.embed_tokens.weight.data.copy_(ckpt["embed_weight"])
+    if "lm_head_weight" in ckpt:
+        model.qwen.lm_head.weight.data.copy_(ckpt["lm_head_weight"])
 
     model.eval()
     return model
