@@ -107,7 +107,7 @@ class DuplexModel(nn.Module):
         self.encoder = self.encoder.to(device=device_str, dtype=torch.bfloat16)
         self.workspace = self.workspace.to(device=device_str, dtype=torch.bfloat16)
         self.adapters = self.adapters.to(device=device_str, dtype=torch.bfloat16)
-        self.adapter_gates = self.adapter_gates.to(device=device_str)
+        self.adapter_gates = self.adapter_gates.to(device=device_str, dtype=torch.bfloat16)
 
         self._inject_adapters()
 
@@ -136,7 +136,7 @@ class DuplexModel(nn.Module):
                             self._current_correction_tokens,
                             self._current_correction_mask,
                         )
-                        hidden_states = hidden_states + torch.tanh(gate_param) * adapter_out
+                        hidden_states = hidden_states + torch.tanh(gate_param).to(hidden_states.dtype) * adapter_out
 
                     return (hidden_states,) + output[1:] if is_tuple else hidden_states
                 return patched_forward
