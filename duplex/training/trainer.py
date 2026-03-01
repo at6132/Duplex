@@ -226,13 +226,14 @@ class DuplexTrainer:
         accum_count = 0
         epoch = 0
 
-        # Convergence: track a smoothed loss (EMA) for stable plateau detection
+        # Convergence: sliding window of recent losses for plateau detection.
+        # EMA alpha=0.4 catches up quickly; patience=12 intervals ~= 300 steps.
         ema_loss = None
-        ema_alpha = 0.1
+        ema_alpha = 0.4
         best_ema = float("inf")
-        plateau_patience = 15       # log intervals with no improvement
+        plateau_patience = 12       # log intervals with no improvement
         plateau_counter = 0
-        plateau_min_delta = 5e-4    # must improve by at least this
+        plateau_min_delta = 1e-3    # must improve by at least this
 
         # Best checkpoint tracking (based on val_loss)
         best_val_loss = float("inf")
