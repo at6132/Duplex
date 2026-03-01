@@ -39,10 +39,10 @@ class DuplexDataset(Dataset):
 
         # Ensure special tokens are registered
         new_tokens = list(SPECIAL_TOKENS.values())
-        already = set(tokenizer.additional_special_tokens or [])
-        to_add = [t for t in new_tokens if t not in already]
+        existing = set(getattr(tokenizer, "additional_special_tokens", []) or [])
+        to_add = [t for t in new_tokens if t not in existing]
         if to_add:
-            tokenizer.add_special_tokens({"additional_special_tokens": list(already | set(to_add))})
+            tokenizer.add_special_tokens({"additional_special_tokens": list(existing | set(to_add))})
 
     def __len__(self) -> int:
         return len(self.samples)
