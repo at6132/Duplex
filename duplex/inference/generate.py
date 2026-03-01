@@ -36,12 +36,6 @@ def load_duplex_model(
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
     model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
-    model.adapters.load_state_dict(ckpt["adapters_state_dict"], strict=False)
-    if "adapter_gates" in ckpt:
-        for i, g in enumerate(model.adapter_gates):
-            key = f"gate_{i}"
-            if key in ckpt["adapter_gates"]:
-                g.data.copy_(ckpt["adapter_gates"][key])
 
     model.eval()
     return model

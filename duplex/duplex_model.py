@@ -1,17 +1,24 @@
 """
-DuplexModel v2: Frozen Qwen3-1.7B with dual-path adapter injection.
+DuplexModel v3: Frozen Qwen3-1.7B with prefix-based conditioning.
 
 Architecture:
     1. Qwen3 decoder layers are frozen, loaded in bfloat16
     2. UpdateEncoder encodes prompt/correction text into per-token states
-    3. WorkspaceModule compresses prompt context into latent slots (high-level)
-    4. CrossAttentionAdapter v2 cross-attends to BOTH workspace slots AND
-       per-token correction states (entity-level detail)
-    5. Flamingo-style tanh(alpha) gating per layer for stable scaling
-    6. Special tokens (<|REVISE_START|>, <|REVISE_END|>, <|INSERT|>) for
+    3. WorkspaceModule compresses context into N latent slots
+    4. Workspace slots are PREPENDED as soft tokens to Qwen's input embeddings
+    5. When correction arrives, correction token embeddings are also prepended
+    6. Qwen's own self-attention naturally conditions on the prefix — no
+       monkey-patching, no hidden-state perturbation, no cascade corruption.
+    7. Special tokens (<|REVISE_START|>, <|REVISE_END|>, <|INSERT|>) for
        retroactive revision
 
-At initialization all gates are zero -> model is identical to vanilla Qwen.
+Why prefix instead of cross-attention adapters:
+    Cross-attention residuals added to every (or every Nth) layer cause
+    cascading perturbation during autoregressive generation. Even small
+    per-layer noise compounds across 28 layers, producing gibberish.
+    Prefix tokens go through the backbone's own self-attention — the model
+    already knows how to condition on input tokens, so this is inherently
+    stable and leverages pretrained attention patterns.
 """
 
 import torch
@@ -19,7 +26,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from .adapter import CrossAttentionAdapter
 from .workspace import WorkspaceModule
 from .encoder import UpdateEncoder
 from .config import DuplexConfig, SPECIAL_TOKENS
@@ -46,7 +52,7 @@ class DuplexModel(nn.Module):
         self.revise_end_id = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS["revise_end"])
         self.insert_id = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS["insert"])
 
-        # Load Qwen
+        # Load Qwen (frozen)
         self.qwen = AutoModelForCausalLM.from_pretrained(
             config.qwen_model_path,
             dtype=torch.bfloat16,
@@ -54,15 +60,13 @@ class DuplexModel(nn.Module):
             attn_implementation="sdpa",
             trust_remote_code=True,
         )
-
-        # Resize embeddings for special tokens
         if n_added > 0:
             self.qwen.resize_token_embeddings(len(self.tokenizer))
 
         for param in self.qwen.parameters():
             param.requires_grad = False
 
-        # Encoder
+        # Encoder (processes prompt/correction text → per-token states)
         encoder_head_dim = config.encoder_dim // config.adapter_n_heads
         self.encoder = UpdateEncoder(
             vocab_size=len(self.tokenizer),
@@ -76,7 +80,7 @@ class DuplexModel(nn.Module):
         if config.encoder_dim != config.workspace_dim:
             self.encoder.set_output_projection(config.workspace_dim)
 
-        # Workspace (high-level context slots)
+        # Workspace (compresses encoder output into N prefix slots)
         self.workspace = WorkspaceModule(
             n_slots=config.n_workspace_slots,
             d_model=config.workspace_dim,
@@ -85,63 +89,9 @@ class DuplexModel(nn.Module):
             dropout=config.adapter_dropout,
         )
 
-        # Adapters (dual-path cross-attention)
-        adapter_head_dim = config.d_model // config.adapter_n_heads
-        self.adapters = nn.ModuleList([
-            CrossAttentionAdapter(
-                d_model=config.d_model,
-                n_heads=config.adapter_n_heads,
-                head_dim=adapter_head_dim,
-                dropout=config.adapter_dropout,
-            )
-            for _ in range(config.n_decoder_layers)
-        ])
-
-        # Flamingo-style tanh gates: one learnable scalar per layer, init to 0
-        self.adapter_gates = nn.ParameterList([
-            nn.Parameter(torch.zeros(1))
-            for _ in range(config.n_decoder_layers)
-        ])
-
-        # Move to device
+        # Move trainable modules to device
         self.encoder = self.encoder.to(device=device_str, dtype=torch.bfloat16)
         self.workspace = self.workspace.to(device=device_str, dtype=torch.bfloat16)
-        self.adapters = self.adapters.to(device=device_str, dtype=torch.bfloat16)
-        self.adapter_gates = self.adapter_gates.to(device=device_str, dtype=torch.bfloat16)
-
-        self._inject_adapters()
-
-        # Runtime state for adapter hooks
-        self._current_workspace: torch.Tensor | None = None
-        self._current_correction_tokens: torch.Tensor | None = None
-        self._current_correction_mask: torch.Tensor | None = None
-
-    def _inject_adapters(self):
-        """Monkey-patch each Qwen layer with dual-path cross-attention + tanh gating."""
-        for i, layer in enumerate(self.qwen.model.layers):
-            adapter = self.adapters[i]
-            gate = self.adapter_gates[i]
-            original_forward = layer.forward
-
-            def make_patched_forward(orig_fn, adapter_module, gate_param):
-                def patched_forward(*args, **kwargs):
-                    output = orig_fn(*args, **kwargs)
-                    is_tuple = isinstance(output, tuple)
-                    hidden_states = output[0] if is_tuple else output
-
-                    ws = self._current_workspace
-                    if ws is not None:
-                        adapter_out = adapter_module(
-                            hidden_states, ws,
-                            self._current_correction_tokens,
-                            self._current_correction_mask,
-                        )
-                        hidden_states = hidden_states + torch.tanh(gate_param).to(hidden_states.dtype) * adapter_out
-
-                    return (hidden_states,) + output[1:] if is_tuple else hidden_states
-                return patched_forward
-
-            layer.forward = make_patched_forward(original_forward, adapter, gate)
 
     def _encode_and_update_workspace(
         self,
@@ -153,6 +103,29 @@ class DuplexModel(nn.Module):
         encoder_output = self.encoder(text_ids, attention_mask=text_mask)
         ws = self.workspace(encoder_output, encoder_mask=text_mask, workspace=workspace)
         return ws, encoder_output
+
+    def _build_prefix(
+        self,
+        workspace: torch.Tensor | None,
+        correction_tokens: torch.Tensor | None = None,
+        correction_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor | None:
+        """Build prefix tensor from workspace slots + optional correction tokens.
+
+        Returns (B, N_prefix, D) or None if no workspace.
+        """
+        if workspace is None:
+            return None
+
+        parts = [workspace]
+
+        if correction_tokens is not None:
+            if correction_mask is not None:
+                # Zero out padded positions so they don't contribute
+                correction_tokens = correction_tokens * correction_mask.unsqueeze(-1).to(correction_tokens.dtype)
+            parts.append(correction_tokens)
+
+        return torch.cat(parts, dim=1) if len(parts) > 1 else workspace
 
     def forward(
         self,
@@ -178,20 +151,44 @@ class DuplexModel(nn.Module):
                 corr_tokens = corr_encoded
                 corr_mask = update_mask
 
-        self._current_workspace = ws
-        self._current_correction_tokens = corr_tokens
-        self._current_correction_mask = corr_mask
+        prefix = self._build_prefix(ws, corr_tokens, corr_mask)
+
+        # Get input embeddings from Qwen's embedding layer
+        input_embeds = self.qwen.model.embed_tokens(input_ids)
+
+        if prefix is not None:
+            B = input_ids.size(0)
+            n_prefix = prefix.size(1)
+
+            # Prepend prefix to input embeddings
+            combined_embeds = torch.cat([prefix, input_embeds], dim=1)
+
+            # Extend attention mask
+            if attention_mask is not None:
+                prefix_mask = torch.ones(B, n_prefix, device=input_ids.device, dtype=attention_mask.dtype)
+                combined_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+            else:
+                combined_mask = None
+
+            # Extend labels (prefix positions are masked with -100)
+            if labels is not None:
+                prefix_labels = torch.full(
+                    (B, n_prefix), -100, device=labels.device, dtype=labels.dtype
+                )
+                combined_labels = torch.cat([prefix_labels, labels], dim=1)
+            else:
+                combined_labels = None
+        else:
+            combined_embeds = input_embeds
+            combined_mask = attention_mask
+            combined_labels = labels
 
         with torch.inference_mode(mode=False):
             outputs = self.qwen(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
+                inputs_embeds=combined_embeds,
+                attention_mask=combined_mask,
+                labels=combined_labels,
             )
-
-        self._current_workspace = None
-        self._current_correction_tokens = None
-        self._current_correction_mask = None
 
         result = {"logits": outputs.logits}
         if outputs.loss is not None:
@@ -219,9 +216,7 @@ class DuplexModel(nn.Module):
         if correction_text and correction_after_tokens is not None:
             correction_enc = self.tokenizer(correction_text, return_tensors="pt").to(device)
 
-        self._current_workspace = ws
-        self._current_correction_tokens = None
-        self._current_correction_mask = None
+        prefix = self._build_prefix(ws)
         generated_ids = prompt_enc["input_ids"].clone()
         text_at_correction = None
 
@@ -241,11 +236,13 @@ class DuplexModel(nn.Module):
                     encoder_mask=correction_enc["attention_mask"],
                     workspace=ws,
                 )
-                self._current_workspace = ws
-                self._current_correction_tokens = corr_encoded
-                self._current_correction_mask = correction_enc["attention_mask"]
+                prefix = self._build_prefix(ws, corr_encoded, correction_enc["attention_mask"])
 
-            outputs = self.qwen(input_ids=generated_ids)
+            input_embeds = self.qwen.model.embed_tokens(generated_ids)
+            combined = torch.cat([prefix, input_embeds], dim=1)
+            outputs = self.qwen(inputs_embeds=combined)
+
+            # Logits for the last real token (not prefix)
             next_logits = outputs.logits[:, -1, :] / max(temperature, 1e-5)
             probs = F.softmax(next_logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
@@ -254,9 +251,6 @@ class DuplexModel(nn.Module):
             if next_token.item() == self.tokenizer.eos_token_id:
                 break
 
-        self._current_workspace = None
-        self._current_correction_tokens = None
-        self._current_correction_mask = None
         full_text = self.tokenizer.decode(generated_ids[0], skip_special_tokens=False)
         return full_text, text_at_correction
 
@@ -288,9 +282,7 @@ class DuplexModel(nn.Module):
         if correction_text and correction_after_tokens is not None:
             correction_enc = self.tokenizer(correction_text, return_tensors="pt").to(device)
 
-        self._current_workspace = ws
-        self._current_correction_tokens = None
-        self._current_correction_mask = None
+        prefix = self._build_prefix(ws)
         generated_ids = prompt_enc["input_ids"].clone()
 
         for step in range(max_new_tokens):
@@ -309,11 +301,12 @@ class DuplexModel(nn.Module):
                     encoder_mask=correction_enc["attention_mask"],
                     workspace=ws,
                 )
-                self._current_workspace = ws
-                self._current_correction_tokens = corr_encoded
-                self._current_correction_mask = correction_enc["attention_mask"]
+                prefix = self._build_prefix(ws, corr_encoded, correction_enc["attention_mask"])
 
-            outputs = self.qwen(input_ids=generated_ids)
+            input_embeds = self.qwen.model.embed_tokens(generated_ids)
+            combined = torch.cat([prefix, input_embeds], dim=1)
+            outputs = self.qwen(inputs_embeds=combined)
+
             next_logits = outputs.logits[:, -1, :] / max(temperature, 1e-5)
             probs = F.softmax(next_logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
@@ -325,16 +318,10 @@ class DuplexModel(nn.Module):
             if next_token.item() == self.tokenizer.eos_token_id:
                 break
 
-        self._current_workspace = None
-        self._current_correction_tokens = None
-        self._current_correction_mask = None
-
     def get_trainable_params(self) -> list[nn.Parameter]:
         params = []
         params.extend(self.encoder.parameters())
         params.extend(self.workspace.parameters())
-        params.extend(self.adapters.parameters())
-        params.extend(self.adapter_gates)
         return params
 
     def trainable_param_count(self) -> int:
@@ -351,5 +338,5 @@ class DuplexModel(nn.Module):
         print(f"Trainable params: {trainable:>12,}")
         print(f"Frozen params:    {frozen:>12,}")
         print(f"Trainable %:      {100 * trainable / total:>11.1f}%")
-        gate_vals = [torch.tanh(g).item() for g in self.adapter_gates]
-        print(f"Gate values:      min={min(gate_vals):.4f}, max={max(gate_vals):.4f}, mean={sum(gate_vals)/len(gate_vals):.4f}")
+        print(f"Prefix slots:     {self.config.n_workspace_slots}")
+        print(f"Architecture:     prefix conditioning (no cross-attention adapters)")

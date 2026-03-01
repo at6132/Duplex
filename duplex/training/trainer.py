@@ -138,8 +138,6 @@ class DuplexTrainer:
         torch.save({
             "encoder_state_dict": self.raw_model.encoder.state_dict(),
             "workspace_state_dict": self.raw_model.workspace.state_dict(),
-            "adapters_state_dict": self.raw_model.adapters.state_dict(),
-            "adapter_gates": {f"gate_{i}": g.data for i, g in enumerate(self.raw_model.adapter_gates)},
             "optimizer_state_dict": self.optimizer.state_dict(),
             "global_step": self.global_step,
             "config": self.config,
@@ -149,13 +147,11 @@ class DuplexTrainer:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.raw_model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
         self.raw_model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
-        self.raw_model.adapters.load_state_dict(ckpt["adapters_state_dict"], strict=False)
-        if "adapter_gates" in ckpt:
-            for i, g in enumerate(self.raw_model.adapter_gates):
-                key = f"gate_{i}"
-                if key in ckpt["adapter_gates"]:
-                    g.data.copy_(ckpt["adapter_gates"][key])
-        self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        try:
+            self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        except (ValueError, KeyError):
+            if self.is_main:
+                print("  >> Optimizer state incompatible (architecture change), reinitializing.")
 
         old_step = ckpt["global_step"]
         old_phase = ckpt.get("config", self.config).phase
@@ -206,7 +202,7 @@ class DuplexTrainer:
                          * self.config.gradient_accumulation_steps
                          * self.world_size)
             print(f"\n{'='*60}")
-            print(f"  Training Duplex-1.1-1.7B | Phase {phase}")
+            print(f"  Training Duplex-1.2-1.7B | Phase {phase}")
             print(f"{'='*60}")
             print(f"  GPUs: {self.world_size} | Batch/GPU: {self.config.batch_size} | "
                   f"Grad accum: {self.config.gradient_accumulation_steps} | "

@@ -1,9 +1,9 @@
 """
-Chat-style demo: talk to Duplex-1.1-1.7B like ChatGPT.
+Chat-style demo: talk to Duplex-1.2-1.7B like ChatGPT.
 Single conversation panel, no comparison. For normal back-and-forth chat.
 
 Usage:
-    python scripts/demo2.py --duplex_ckpt checkpoints/duplex-1.1-1.7b/final.pt
+    python scripts/demo2.py --duplex_ckpt checkpoints/duplex-1.2-1.7b/final.pt
 """
 
 import argparse
@@ -67,7 +67,7 @@ def extract_reply(full_text: str, prompt: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--duplex_ckpt", required=True, help="Path to Duplex checkpoint (e.g. checkpoints/duplex-1.1-1.7b/final.pt)")
+    parser.add_argument("--duplex_ckpt", required=True, help="Path to Duplex checkpoint (e.g. checkpoints/duplex-1.2-1.7b/final.pt)")
     parser.add_argument("--qwen_path", default="models/qwen3-1.7b-base")
     parser.add_argument("--port", type=int, default=7861)
     parser.add_argument("--max_tokens", type=int, default=256)
@@ -76,11 +76,11 @@ def main():
 
     print("Loading Qwen3-1.7B (vanilla)...")
     qwen_model, qwen_tokenizer = load_vanilla_qwen(args.qwen_path, quantize=False)
-    print("Loading Duplex-1.1-1.7B...")
+    print("Loading Duplex-1.2-1.7B...")
     duplex_model = load_duplex_model(args.qwen_path, args.duplex_ckpt)
     print("Ready.\n")
 
-    MODEL_CHOICES = ["Duplex-1.1-1.7B", "Qwen3-1.7B (Vanilla)"]
+    MODEL_CHOICES = ["Duplex-1.2-1.7B", "Qwen3-1.7B (Vanilla)"]
 
     def chat(message: str, history: list, model_choice: str):
         if not message.strip():

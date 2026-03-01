@@ -29,10 +29,8 @@ class DuplexConfig:
     encoder_dim: int = 1024
     encoder_ff_dim: int = 4096
 
-    # Adapter
+    # Adapter / Encoder
     adapter_n_heads: int = 16
-
-    # Training
     adapter_dropout: float = 0.05
 
     # Model paths & precision
@@ -51,7 +49,7 @@ class TrainingConfig:
     log_every: int = 25
     eval_every: int = 1000
     save_every: int = 5000
-    checkpoint_dir: str = "checkpoints/duplex-1.1-1.7b"
+    checkpoint_dir: str = "checkpoints/duplex-1.2-1.7b"
     phase: int = 1
     grad_clip: float = 1.0
     seed: int = 42

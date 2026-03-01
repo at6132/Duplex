@@ -7,8 +7,10 @@ Path 2: per-token correction states (T_corr x D) — entity-level detail
 KV = concat(workspace_slots, correction_token_states) when correction is
 available, otherwise just workspace_slots.
 
-Tanh gate (in DuplexModel) is zero-initialized so adapter is a no-op at start.
-o_proj uses standard init to keep gradient flow alive.
+Tanh gate (in DuplexModel) is zero-initialized so adapter is near no-op at start.
+o_proj uses small init (std=0.002) for safe startup. RMSNorm on output bounds
+the adapter's contribution magnitude, preventing cascading perturbation
+during autoregressive generation.
 """
 
 import math
@@ -40,11 +42,9 @@ class CrossAttentionAdapter(nn.Module):
         self.o_proj = nn.Linear(self.inner_dim, d_model, bias=False)
 
         self.dropout = nn.Dropout(dropout)
+        self.ln_out = nn.RMSNorm(d_model, eps=1e-6)
 
-        # NOTE: o_proj uses standard init (NOT zero).
-        # The tanh gate (initialized to 0 in DuplexModel) is the sole zero-init,
-        # which is enough to preserve Qwen's output at the start.
-        # Zero-initializing BOTH kills all gradients: tanh(0)*0 = 0 everywhere.
+        nn.init.normal_(self.o_proj.weight, std=0.002)
 
     def forward(
         self,
@@ -101,4 +101,4 @@ class CrossAttentionAdapter(nn.Module):
         attn = self.dropout(attn)
 
         out = (attn @ v).transpose(1, 2).contiguous().view(B, T, self.inner_dim)
-        return self.o_proj(out)
+        return self.ln_out(self.o_proj(out))

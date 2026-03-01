@@ -2,7 +2,7 @@
 Demo 3: Breakthrough showcase — the clearest way to show why Duplex is a leap forward.
 
 Single scenario, streaming, with "problem vs solution" framing and strong visuals.
-Usage: python scripts/demo3.py --duplex_ckpt checkpoints/duplex-1.1-1.7b/final.pt
+Usage: python scripts/demo3.py --duplex_ckpt checkpoints/duplex-1.2-1.7b/final.pt
 """
 
 import argparse

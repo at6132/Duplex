@@ -44,10 +44,10 @@ SCENARIOS = [
 
 def main():
     qwen_path = "models/qwen3-1.7b-base"
-    ckpt_path = "checkpoints/duplex-1.1-1.7b/phase2_best.pt"
+    ckpt_path = "checkpoints/duplex-1.2-1.7b/phase2_best.pt"
 
     if not os.path.exists(ckpt_path):
-        ckpt_path = "checkpoints/duplex-1.1-1.7b/final.pt"
+        ckpt_path = "checkpoints/duplex-1.2-1.7b/final.pt"
     if not os.path.exists(qwen_path):
         print(f"ERROR: {qwen_path} not found.")
         return
@@ -62,13 +62,8 @@ def main():
     duplex_model = load_duplex_model(qwen_path, ckpt_path)
     print("Both loaded.\n")
 
-    # Print gate values
-    print("Adapter gate values (tanh):")
-    for i, g in enumerate(duplex_model.adapter_gates):
-        if i < 3 or i >= 26:
-            print(f"  Layer {i:2d}: tanh(alpha) = {torch.tanh(g).item():.6f}")
-        elif i == 3:
-            print(f"  ...")
+    print(f"Architecture: prefix conditioning")
+    print(f"Trainable params: {duplex_model.trainable_param_count():,}")
     print()
 
     for s in SCENARIOS:

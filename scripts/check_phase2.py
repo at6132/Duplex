@@ -17,7 +17,7 @@ from duplex.inference.generate import load_duplex_model
 from duplex.renderer import render_final, strip_action_tokens
 from duplex.config import SPECIAL_TOKENS
 
-CKPT = "checkpoints/duplex-1.1-1.7b/phase2_best.pt"
+CKPT = "checkpoints/duplex-1.2-1.7b/phase2_best.pt"
 QWEN = "models/qwen3-1.7b-base"
 
 CHECKS = [
@@ -72,13 +72,9 @@ def run():
     model.eval()
     print("Loaded.\n")
 
-    # Show gate values — should be non-zero if Phase 2 trained
-    gate_vals = [torch.tanh(g).item() for g in model.adapter_gates]
-    print(f"Gate check: min={min(gate_vals):.4f}  max={max(gate_vals):.4f}  mean={sum(gate_vals)/len(gate_vals):.4f}")
-    if max(gate_vals) < 0.01:
-        print("WARNING: All gates near zero — adapters not contributing. Phase 2 likely did not train.\n")
-    else:
-        print("Gates are active.\n")
+    print(f"Architecture: prefix conditioning (v3)")
+    print(f"Trainable params: {model.trainable_param_count():,}")
+    print(f"Prefix slots: {model.config.n_workspace_slots}\n")
 
     REVISE_START = SPECIAL_TOKENS["revise_start"]
     passes = 0
