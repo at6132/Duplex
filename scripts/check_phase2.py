@@ -17,7 +17,7 @@ from duplex.inference.generate import load_duplex_model
 from duplex.renderer import render_final, strip_action_tokens
 from duplex.config import SPECIAL_TOKENS
 
-CKPT = "checkpoints/duplex-1.2-1.7b/phase2_best.pt"
+CKPT = "checkpoints/duplex-1.3-1.7b/phase2_best.pt"
 QWEN = "models/qwen3-1.7b-base"
 
 CHECKS = [
