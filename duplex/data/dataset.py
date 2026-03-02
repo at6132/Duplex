@@ -1,11 +1,14 @@
 """
-Dataset for Duplex-1 v2 training.
+Dataset for Duplex-1.3 training (prefix conditioning architecture).
 
-Phase 1: Decoder sees prompt, predicts partial_response. Workspace = encode(prompt).
-Phase 2: Decoder sees prompt + WRONG partial (cut mid-sentence), labels = revision-
-         annotated continuation with <|REVISE_START|>...<|REVISE_END|> tokens.
-         Workspace = encode(prompt) + gated_update(correction).
-         Correction per-token states are passed alongside workspace to adapters.
+Key design: the prompt is ONLY available through the prefix (workspace).
+The decoder input contains only a generic instruction + the response.
+This forces the model to attend to the prefix for task-specific details.
+
+Phase 1: Prefix = encode(prompt). Decoder sees generic instruction + response.
+         Labels = response tokens. Model MUST use prefix for specific content.
+Phase 2: Prefix = encode(prompt) + encode(correction). Decoder sees generic
+         instruction + wrong partial + revised continuation. Labels = revised part.
 """
 
 import json
@@ -14,7 +17,16 @@ import torch
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
 
-from duplex.config import SPECIAL_TOKENS
+GENERIC_INSTRUCTIONS = [
+    "Respond to the following request.",
+    "Answer the question below.",
+    "Complete the task as instructed.",
+    "Write a response based on the given context.",
+    "Provide a helpful answer.",
+    "Follow the instructions and respond.",
+    "Generate a response for this task.",
+    "Answer based on the provided information.",
+]
 
 
 class DuplexDataset(Dataset):
@@ -37,20 +49,13 @@ class DuplexDataset(Dataset):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # Ensure special tokens are registered
-        new_tokens = list(SPECIAL_TOKENS.values())
-        existing = set(getattr(tokenizer, "additional_special_tokens", []) or [])
-        to_add = [t for t in new_tokens if t not in existing]
-        if to_add:
-            tokenizer.add_special_tokens({"additional_special_tokens": list(existing | set(to_add))})
-
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         s = self.samples[idx]
 
-        # Encoder input: prompt
+        # Encoder input: full prompt (this goes into prefix, NOT decoder input)
         prompt_enc = self.tokenizer(
             s["prompt"],
             max_length=self.max_prompt_len,
@@ -59,8 +64,11 @@ class DuplexDataset(Dataset):
             return_tensors="pt",
         )
 
+        # Generic instruction replaces the specific prompt in decoder input.
+        # The model can ONLY get task-specific details from the prefix.
+        generic = random.choice(GENERIC_INSTRUCTIONS)
+
         if self.phase == 1:
-            # Phase 1: no correction, predict partial_response
             update_enc = self.tokenizer(
                 "",
                 max_length=self.max_correction_len,
@@ -68,10 +76,11 @@ class DuplexDataset(Dataset):
                 truncation=True,
                 return_tensors="pt",
             )
-            full_text = s["prompt"] + " " + s["partial_response"]
-            target_start_text = s["prompt"] + " "
+            # Decoder: generic instruction + response (NOT the actual prompt)
+            response = s["partial_response"]
+            full_text = generic + " " + response
+            target_start_text = generic + " "
         else:
-            # Phase 2: correction + revision-annotated target
             update_enc = self.tokenizer(
                 s.get("correction", ""),
                 max_length=self.max_correction_len,
@@ -83,7 +92,6 @@ class DuplexDataset(Dataset):
             partial = s.get("partial_response", "")
             revised = s.get("revised_continuation", "")
 
-            # Cut partial at a random point (30–80%) to simulate mid-generation
             if partial:
                 words = partial.split()
                 cut_frac = random.uniform(0.3, 0.8)
@@ -92,10 +100,9 @@ class DuplexDataset(Dataset):
             else:
                 partial_cut = ""
 
-            # Decoder: prompt + wrong partial (cut) + revised continuation
-            # Loss is ONLY on revised continuation (which contains action tokens)
-            full_text = s["prompt"] + " " + partial_cut + " " + revised
-            target_start_text = s["prompt"] + " " + partial_cut + " "
+            # Decoder: generic instruction + wrong partial + revised continuation
+            full_text = generic + " " + partial_cut + " " + revised
+            target_start_text = generic + " " + partial_cut + " "
 
         decoder_enc = self.tokenizer(
             full_text,
