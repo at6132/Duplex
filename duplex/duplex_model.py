@@ -9,8 +9,8 @@ Architecture:
     5. When correction arrives, correction token embeddings are also prepended
     6. Qwen's own self-attention naturally conditions on the prefix — no
        monkey-patching, no hidden-state perturbation, no cascade corruption.
-    7. Special tokens (<|REVISE_START|>, <|REVISE_END|>, <|INSERT|>) for
-       retroactive revision
+    7. Revision markers use existing Qwen tokens ([[REVISE:, ]]) so no new
+       embeddings needed — Qwen stays fully frozen
 
 Why prefix instead of cross-attention adapters:
     Cross-attention residuals added to every (or every Nth) layer cause
@@ -28,7 +28,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .workspace import WorkspaceModule
 from .encoder import UpdateEncoder
-from .config import DuplexConfig, SPECIAL_TOKENS
+from .config import DuplexConfig, REVISION_MARKERS
 
 
 class DuplexModel(nn.Module):
@@ -38,21 +38,16 @@ class DuplexModel(nn.Module):
         self.local_rank = local_rank
         device_str = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
 
-        # Tokenizer + special tokens
+        # Tokenizer (no new special tokens — revision markers use existing vocab)
         self.tokenizer = AutoTokenizer.from_pretrained(
             config.qwen_model_path, trust_remote_code=True
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        new_tokens = list(SPECIAL_TOKENS.values())
-        n_added = self.tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+        self.revision_markers = REVISION_MARKERS
 
-        self.revise_start_id = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS["revise_start"])
-        self.revise_end_id = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS["revise_end"])
-        self.insert_id = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS["insert"])
-
-        # Load Qwen (frozen)
+        # Load Qwen (fully frozen — no embedding resize, no gradient masking)
         self.qwen = AutoModelForCausalLM.from_pretrained(
             config.qwen_model_path,
             dtype=torch.bfloat16,
@@ -60,26 +55,8 @@ class DuplexModel(nn.Module):
             attn_implementation="sdpa",
             trust_remote_code=True,
         )
-        if n_added > 0:
-            self.qwen.resize_token_embeddings(len(self.tokenizer))
-
         for param in self.qwen.parameters():
             param.requires_grad = False
-
-        # Unfreeze embed + lm_head but ONLY allow gradients on special token rows.
-        # Without this, training updates all 152K rows of both matrices (625M params),
-        # destroying Qwen's pretrained token knowledge.
-        self.qwen.model.embed_tokens.weight.requires_grad = True
-        self.qwen.lm_head.weight.requires_grad = True
-        self._special_token_ids = [self.revise_start_id, self.revise_end_id, self.insert_id]
-
-        # Gradient mask: only special token rows get nonzero gradient
-        vocab_size = len(self.tokenizer)
-        grad_mask = torch.zeros(vocab_size, 1, device=device_str)
-        for sid in self._special_token_ids:
-            grad_mask[sid] = 1.0
-        self.qwen.model.embed_tokens.weight.register_hook(lambda g: g * grad_mask)
-        self.qwen.lm_head.weight.register_hook(lambda g: g * grad_mask)
 
         # Encoder (processes prompt/correction text → per-token states)
         encoder_head_dim = config.encoder_dim // config.adapter_n_heads
@@ -337,8 +314,6 @@ class DuplexModel(nn.Module):
         params = []
         params.extend(self.encoder.parameters())
         params.extend(self.workspace.parameters())
-        params.append(self.qwen.model.embed_tokens.weight)
-        params.append(self.qwen.lm_head.weight)
         return params
 
     def trainable_param_count(self) -> int:
@@ -355,9 +330,5 @@ class DuplexModel(nn.Module):
         print(f"Trainable params: {trainable:>12,}")
         print(f"Frozen params:    {frozen:>12,}")
         print(f"Trainable %:      {100 * trainable / total:>11.1f}%")
-        n_effective = trainable - self.qwen.model.embed_tokens.weight.numel() - self.qwen.lm_head.weight.numel()
-        n_special_params = len(self._special_token_ids) * self.config.d_model * 2
-        n_effective += n_special_params
-        print(f"Effective train:  {n_effective:>12,} (embed/head masked to {len(self._special_token_ids)} special tokens)")
         print(f"Prefix slots:     {self.config.n_workspace_slots}")
-        print(f"Architecture:     prefix conditioning (no cross-attention adapters)")
+        print(f"Architecture:     prefix conditioning (Qwen fully frozen)")

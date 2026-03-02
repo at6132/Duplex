@@ -1,11 +1,16 @@
 from dataclasses import dataclass, field
 
-# Special tokens for retroactive revision
-SPECIAL_TOKENS = {
-    "revise_start": "<|REVISE_START|>",
-    "revise_end": "<|REVISE_END|>",
-    "insert": "<|INSERT|>",
+# Revision markers using EXISTING tokens Qwen already knows.
+# No new token embeddings needed — the frozen lm_head can already produce these.
+# The renderer strips these markers and applies the revision to the display.
+REVISION_MARKERS = {
+    "revise_start": "[[REVISE:",
+    "revise_end": "]]",
+    "insert": "[[INSERT:",
 }
+
+# Legacy alias for backward compatibility
+SPECIAL_TOKENS = REVISION_MARKERS
 
 
 @dataclass

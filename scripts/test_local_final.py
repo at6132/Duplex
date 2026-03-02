@@ -32,7 +32,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 N_CLASSES = 5
 MOTIFS = {k: [4*k, 4*k+1, 4*k+2, 4*k+3] for k in range(N_CLASSES)}
-MARKER = 30  # action token analog
+MARKER = 19  # use EXISTING token backbone already knows (not a new/unknown token)
 SEQ_LEN = 24
 
 
@@ -136,11 +136,7 @@ class PrefixLM(nn.Module):
         return ids[0].tolist()
 
     def adapter_params(self):
-        # Include backbone's embed + lm_head — special tokens need trainable I/O
-        return (list(self.encoder.parameters())
-                + list(self.workspace.parameters())
-                + list(self.backbone.embed.parameters())
-                + list(self.backbone.head.parameters()))
+        return list(self.encoder.parameters()) + list(self.workspace.parameters())
 
 
 # -------------------- Joint Training Data --------------------
@@ -225,11 +221,8 @@ def main():
     model = PrefixLM(backbone, n_prefix=12).to(DEVICE)
     for p in model.backbone.parameters():
         p.requires_grad = False
-    # Re-enable embed + lm_head — needed to learn special token I/O (MARKER)
-    for p in model.backbone.head.parameters():
-        p.requires_grad = True
-    for p in model.backbone.embed.parameters():
-        p.requires_grad = True
+    # Backbone stays FULLY frozen. MARKER is an existing token the backbone
+    # already knows — no embed/head unfreezing needed.
     opt = torch.optim.AdamW(model.adapter_params(), lr=3e-3)
     model.train()
 
