@@ -66,12 +66,20 @@ class DuplexModel(nn.Module):
         for param in self.qwen.parameters():
             param.requires_grad = False
 
-        # Unfreeze embed + lm_head for special tokens. The model must learn
-        # to generate <|REVISE_START|> etc. — their weights start random after
-        # resize and need gradient flow to become meaningful.
+        # Unfreeze embed + lm_head but ONLY allow gradients on special token rows.
+        # Without this, training updates all 152K rows of both matrices (625M params),
+        # destroying Qwen's pretrained token knowledge.
         self.qwen.model.embed_tokens.weight.requires_grad = True
         self.qwen.lm_head.weight.requires_grad = True
         self._special_token_ids = [self.revise_start_id, self.revise_end_id, self.insert_id]
+
+        # Gradient mask: only special token rows get nonzero gradient
+        vocab_size = len(self.tokenizer)
+        grad_mask = torch.zeros(vocab_size, 1, device=device_str)
+        for sid in self._special_token_ids:
+            grad_mask[sid] = 1.0
+        self.qwen.model.embed_tokens.weight.register_hook(lambda g: g * grad_mask)
+        self.qwen.lm_head.weight.register_hook(lambda g: g * grad_mask)
 
         # Encoder (processes prompt/correction text → per-token states)
         encoder_head_dim = config.encoder_dim // config.adapter_n_heads
@@ -347,5 +355,9 @@ class DuplexModel(nn.Module):
         print(f"Trainable params: {trainable:>12,}")
         print(f"Frozen params:    {frozen:>12,}")
         print(f"Trainable %:      {100 * trainable / total:>11.1f}%")
+        n_effective = trainable - self.qwen.model.embed_tokens.weight.numel() - self.qwen.lm_head.weight.numel()
+        n_special_params = len(self._special_token_ids) * self.config.d_model * 2
+        n_effective += n_special_params
+        print(f"Effective train:  {n_effective:>12,} (embed/head masked to {len(self._special_token_ids)} special tokens)")
         print(f"Prefix slots:     {self.config.n_workspace_slots}")
         print(f"Architecture:     prefix conditioning (no cross-attention adapters)")
