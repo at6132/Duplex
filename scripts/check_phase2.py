@@ -1,9 +1,8 @@
 """
-Quick Phase 2 verification: did the model learn to use action tokens?
+Quick Phase 2 verification for Duplex-1.3.
 
-Loads only Duplex (no vanilla), runs 4 targeted correction scenarios,
-checks whether <|REVISE_START|> tokens appear and the corrected entity
-is present. Prints PASS/FAIL for each.
+Loads Duplex, runs 4 targeted correction scenarios, checks whether
+the corrected entity appears in the output and the old entity is gone.
 
 Usage:
     python scripts/check_phase2.py
@@ -14,8 +13,6 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 
 import torch
 from duplex.inference.generate import load_duplex_model
-from duplex.renderer import render_final, strip_action_tokens
-from duplex.config import SPECIAL_TOKENS
 
 CKPT = "checkpoints/duplex-1.3-1.7b/phase2_best.pt"
 QWEN = "models/qwen3-1.7b-base"
@@ -72,28 +69,34 @@ def run():
     model.eval()
     print("Loaded.\n")
 
-    print(f"Architecture: prefix conditioning (v3)")
+    print(f"Architecture: prefix conditioning (v1.3)")
     print(f"Trainable params: {model.trainable_param_count():,}")
-    print(f"Prefix slots: {model.config.n_workspace_slots}\n")
+    print(f"Prefix slots: {model.config.n_workspace_slots}")
+    print(f"Decoder input: GENERIC instruction ('{model.GENERIC_INSTRUCTION}')\n")
 
-    REVISE_START = SPECIAL_TOKENS["revise_start"]
     passes = 0
 
     for c in CHECKS:
-        raw, _ = model.generate_with_update(
+        # Run WITHOUT correction first (baseline)
+        baseline, _ = model.generate_with_update(
+            prompt_text=c["prompt"],
+            max_new_tokens=150,
+            temperature=0.1,
+        )
+
+        # Run WITH correction
+        corrected, text_at_correction = model.generate_with_update(
             prompt_text=c["prompt"],
             max_new_tokens=150,
             temperature=0.1,
             correction_text=c["correction"],
             correction_after_tokens=c["inject_after"],
         )
-        rendered = render_final(raw)
-        clean = strip_action_tokens(raw)
 
-        has_revise_token = REVISE_START in raw
-        entity_ok = all(m.lower() in rendered.lower() for m in c["must_contain"])
-        avoid_ok = all(m.lower() not in rendered.lower() for m in c["must_not_contain"])
-        passed = has_revise_token and entity_ok and avoid_ok
+        entity_ok = all(m.lower() in corrected.lower() for m in c["must_contain"])
+        avoid_ok = all(m.lower() not in corrected.lower() for m in c["must_not_contain"])
+        outputs_differ = baseline.strip() != corrected.strip()
+        passed = entity_ok and avoid_ok and outputs_differ
 
         status = "PASS" if passed else "FAIL"
         if passed:
@@ -104,17 +107,20 @@ def run():
         print(f"  Prompt:     {c['prompt'][:60]}")
         print(f"  Correction: {c['correction']}")
         print(f"  Inject at:  token {c['inject_after']}")
-        print(f"  Action token present: {'YES' if has_revise_token else 'NO'}")
         print(f"  Must-contain {c['must_contain']}: {'YES' if entity_ok else 'NO'}")
         if c["must_not_contain"]:
             print(f"  Must-avoid  {c['must_not_contain']}: {'YES (avoided)' if avoid_ok else 'NO (still present)'}")
-        print(f"\n  Rendered output:\n  {rendered.strip()[:300]}")
+        print(f"  Outputs differ after correction: {'YES' if outputs_differ else 'NO'}")
+        print(f"\n  Baseline output:\n  {baseline.strip()[:200]}")
+        print(f"\n  Corrected output:\n  {corrected.strip()[:200]}")
+        if text_at_correction:
+            print(f"\n  Text at correction point:\n  {text_at_correction[:150]}")
         print()
 
     print(f"{'='*60}")
     print(f"RESULT: {passes}/{len(CHECKS)} scenarios passed")
     if passes == len(CHECKS):
-        print("Phase 2 training SUCCESS — model is using action tokens for correction.")
+        print("Phase 2 training SUCCESS — model applies corrections via workspace update.")
     elif passes >= len(CHECKS) // 2:
         print("Partial success — model partially learned corrections. Consider more Phase 2 training.")
     else:

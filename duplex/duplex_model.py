@@ -187,6 +187,8 @@ class DuplexModel(nn.Module):
             result["loss"] = outputs.loss
         return result
 
+    GENERIC_INSTRUCTION = "Respond to the following request."
+
     @torch.no_grad()
     def generate_with_update(
         self,
@@ -199,6 +201,7 @@ class DuplexModel(nn.Module):
         self.eval()
         device = next(self.qwen.parameters()).device
 
+        # Prompt goes ONLY through encoder -> prefix (not decoder input)
         prompt_enc = self.tokenizer(prompt_text, return_tensors="pt").to(device)
         ws, _ = self._encode_and_update_workspace(
             prompt_enc["input_ids"], prompt_enc["attention_mask"]
@@ -209,16 +212,20 @@ class DuplexModel(nn.Module):
             correction_enc = self.tokenizer(correction_text, return_tensors="pt").to(device)
 
         prefix = self._build_prefix(ws)
-        generated_ids = prompt_enc["input_ids"].clone()
+
+        # Decoder starts with GENERIC instruction (matches training paradigm)
+        generic_enc = self.tokenizer(
+            self.GENERIC_INSTRUCTION, return_tensors="pt"
+        ).to(device)
+        generated_ids = generic_enc["input_ids"].clone()
+        generic_len = generated_ids.size(1)
         text_at_correction = None
 
         for step in range(max_new_tokens):
             if (correction_enc is not None
                     and correction_after_tokens is not None
                     and step == correction_after_tokens):
-                text_at_correction = self.tokenizer.decode(
-                    generated_ids[0], skip_special_tokens=True
-                )
+                text_at_correction = self._decode_response(generated_ids[0], generic_len)
                 corr_encoded = self.encoder(
                     correction_enc["input_ids"],
                     attention_mask=correction_enc["attention_mask"],
@@ -234,7 +241,6 @@ class DuplexModel(nn.Module):
             combined = torch.cat([prefix, input_embeds], dim=1)
             outputs = self.qwen(inputs_embeds=combined)
 
-            # Logits for the last real token (not prefix)
             next_logits = outputs.logits[:, -1, :] / max(temperature, 1e-5)
             probs = F.softmax(next_logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
@@ -243,8 +249,13 @@ class DuplexModel(nn.Module):
             if next_token.item() == self.tokenizer.eos_token_id:
                 break
 
-        full_text = self.tokenizer.decode(generated_ids[0], skip_special_tokens=False)
-        return full_text, text_at_correction
+        response = self._decode_response(generated_ids[0], generic_len)
+        return response, text_at_correction
+
+    def _decode_response(self, token_ids: torch.Tensor, skip_prefix_len: int) -> str:
+        """Decode tokens, stripping the generic instruction prefix."""
+        response_ids = token_ids[skip_prefix_len:]
+        return self.tokenizer.decode(response_ids, skip_special_tokens=False).strip()
 
     INJECTION_VISUAL = (
         "\n\n"
@@ -265,6 +276,7 @@ class DuplexModel(nn.Module):
         self.eval()
         device = next(self.qwen.parameters()).device
 
+        # Prompt goes ONLY through encoder -> prefix
         prompt_enc = self.tokenizer(prompt_text, return_tensors="pt").to(device)
         ws, _ = self._encode_and_update_workspace(
             prompt_enc["input_ids"], prompt_enc["attention_mask"]
@@ -275,13 +287,19 @@ class DuplexModel(nn.Module):
             correction_enc = self.tokenizer(correction_text, return_tensors="pt").to(device)
 
         prefix = self._build_prefix(ws)
-        generated_ids = prompt_enc["input_ids"].clone()
+
+        # Decoder starts with GENERIC instruction (matches training)
+        generic_enc = self.tokenizer(
+            self.GENERIC_INSTRUCTION, return_tensors="pt"
+        ).to(device)
+        generated_ids = generic_enc["input_ids"].clone()
+        generic_len = generated_ids.size(1)
 
         for step in range(max_new_tokens):
             if (correction_enc is not None
                     and correction_after_tokens is not None
                     and step == correction_after_tokens):
-                text_so_far = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+                text_so_far = self._decode_response(generated_ids[0], generic_len)
                 yield text_so_far + self.INJECTION_VISUAL
 
                 corr_encoded = self.encoder(
@@ -304,8 +322,8 @@ class DuplexModel(nn.Module):
             next_token = torch.multinomial(probs, num_samples=1)
             generated_ids = torch.cat([generated_ids, next_token], dim=1)
 
-            full = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
-            yield full
+            response = self._decode_response(generated_ids[0], generic_len)
+            yield response
 
             if next_token.item() == self.tokenizer.eos_token_id:
                 break
