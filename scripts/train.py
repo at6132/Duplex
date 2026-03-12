@@ -30,6 +30,12 @@ def setup_ddp():
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank == -1:
         return False, 0, 1
+    n_gpus = torch.cuda.device_count()
+    if local_rank >= n_gpus:
+        raise RuntimeError(
+            f"LOCAL_RANK={local_rank} but only {n_gpus} GPU(s) visible. "
+            f"Use torchrun --nproc_per_node={n_gpus} (or python scripts/train.py for single GPU)."
+        )
     dist.init_process_group(backend="nccl")
     torch.cuda.set_device(local_rank)
     return True, local_rank, dist.get_world_size()
@@ -75,6 +81,11 @@ def main():
         train_config.gradient_accumulation_steps = args.grad_accum
     if args.learning_rate is not None:
         train_config.learning_rate = args.learning_rate
+
+    # Auto-adjust warmup: 10% of max_steps, capped at the configured default.
+    # Prevents warmup from exceeding total training (e.g. warmup=3000, max_steps=2000).
+    auto_warmup = max(50, train_config.max_steps // 10)
+    train_config.warmup_steps = min(train_config.warmup_steps, auto_warmup)
 
     if is_main:
         print("Loading Duplex-1.3-1.7B v2...")

@@ -65,41 +65,119 @@ The decoder's next-token distribution changes because the prefix changed, not be
 
 ```bash
 pip install -r requirements.txt
-python scripts/download_qwen.py
+python scripts/download_qwen.py   # or: download Qwen3-1.7B-Base to models/qwen3-1.7b-base
 ```
 
-## Quick Start
+## Using the Model
+
+### Load a trained checkpoint
+
+```python
+from duplex.inference.generate import load_duplex_model
+
+model = load_duplex_model(
+    qwen_path="models/qwen3-1.7b-base",
+    checkpoint_path="checkpoints/duplex-1.3-1.7b/phase2_best.pt",
+)
+model.eval()
+```
+
+### Basic generation (no correction)
+
+```python
+response, _ = model.generate_with_update(
+    prompt_text="Write a short bio for James, a 28-year-old chef from Paris.",
+    max_new_tokens=200,
+    temperature=0.7,
+)
+print(response)
+```
+
+The prompt is encoded through the workspace prefix. The decoder receives a generic instruction internally — the model gets all task-specific info from the prefix, not the decoder input.
+
+### Mid-stream correction (full-duplex)
+
+```python
+response, text_at_correction = model.generate_with_update(
+    prompt_text="Write a short bio for James, a 28-year-old chef from Paris.",
+    max_new_tokens=200,
+    temperature=0.7,
+    correction_text="Update: the person's name is Marco, not James.",
+    correction_after_tokens=15,  # inject correction after 15 generated tokens
+)
+print(response)              # should reflect "Marco" instead of "James"
+print(text_at_correction)    # what was generated before the correction hit
+```
+
+What happens internally:
+1. Encoder processes the prompt -> workspace prefix is built
+2. Model starts generating (decoder sees generic instruction + prefix)
+3. At token 15, the correction is encoded and the workspace updates
+4. The prefix changes — subsequent tokens are conditioned on the updated workspace
+5. No stop, no restart. Generation continues with new information.
+
+### Streaming generation
+
+```python
+for text in model.generate_with_update_streaming(
+    prompt_text="Describe a tourist visiting New York for the first time.",
+    max_new_tokens=200,
+    temperature=0.7,
+    correction_text="Change the city to Tokyo.",
+    correction_after_tokens=12,
+):
+    print(text, end="\r")  # overwrite line for live streaming effect
+```
+
+The stream yields the current full response text after each token. When the correction is injected, it yields a visual injection marker before continuing.
+
+## Training from Scratch
 
 ### 1. Generate training data
 ```bash
 python scripts/generate_data.py --n_train 500000 --n_val 20000 --n_test 10000
 ```
 
-### 2. Train
+### 2. Train Phase 1 (workspace-conditioned generation)
 ```bash
-# Phase 1: workspace-conditioned generation
-torchrun --nproc_per_node=2 scripts/train.py --phase 1 --max_steps 2000
+# Multi-GPU (adjust --nproc_per_node to your GPU count)
+torchrun --nproc_per_node=2 scripts/train.py --phase 1 --max_steps 2000 --batch_size 8 --grad_accum 16
 
-# Phase 2: mid-stream correction with revision markers
-torchrun --nproc_per_node=2 scripts/train.py --phase 2 --max_steps 5000 --resume checkpoints/duplex-1.3-1.7b/phase1_final.pt
+# Single GPU
+python scripts/train.py --phase 1 --max_steps 2000
 ```
 
-### 3. Evaluate
+### 3. Train Phase 2 (mid-stream correction)
 ```bash
-python scripts/check_phase2.py
+torchrun --nproc_per_node=2 scripts/train.py --phase 2 --max_steps 5000 --batch_size 8 --grad_accum 16 --resume checkpoints/duplex-1.3-1.7b/phase1_best.pt
+```
+
+### 4. Evaluate
+```bash
+python scripts/check_phase2.py       # quick PASS/FAIL on 4 correction scenarios
 python scripts/evaluate.py --duplex_ckpt checkpoints/duplex-1.3-1.7b/final.pt --n_samples 200
 ```
 
-### 4. Demo (side-by-side: Qwen vs Duplex)
+### 5. Demo
 ```bash
-python scripts/demo.py --duplex_ckpt checkpoints/duplex-1.3-1.7b/final.pt
+python scripts/demo.py --duplex_ckpt checkpoints/duplex-1.3-1.7b/final.pt   # side-by-side: Qwen vs Duplex
+python scripts/demo2.py               # ChatGPT-style single-model demo
 ```
 
-### 5. Local architecture test (no GPU needed)
+### 6. Local architecture test (no Qwen download needed)
 ```bash
-python scripts/test_local.py         # basic: prefix vs cross-attn comparison
-python scripts/test_local_final.py   # full: marker emission + mid-stream correction
+python scripts/test_local_final.py    # validates prefix conditioning on a tiny model
 ```
+
+## GPU Requirements
+
+| Setup | Batch size | Grad accum | Steps/s | Phase 1 time |
+|-------|-----------|------------|---------|--------------|
+| 1x A100 80GB | 8 | 16 | ~0.10 | ~5.5 hrs |
+| 2x A100 80GB | 8 | 16 | ~0.19 | ~3 hrs |
+| 2x H200 141GB | 16 | 8 | ~0.37 | ~1.5 hrs |
+
+Batch size 32 per GPU OOMs on A100 80GB. Use batch_size 8 with gradient accumulation to maintain the same effective batch size.
 
 ## Project Structure
 
