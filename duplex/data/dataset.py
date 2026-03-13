@@ -5,10 +5,15 @@ Key design: the prompt is ONLY available through the prefix (workspace).
 The decoder input contains only a generic instruction + the response.
 This forces the model to attend to the prefix for task-specific details.
 
-Phase 1: Prefix = encode(prompt). Decoder sees generic instruction + response.
-         Labels = response tokens. Model MUST use prefix for specific content.
+CRITICAL: Token dropout (default 50%) randomly replaces response tokens in the
+decoder input with pad tokens. Without this, teacher forcing lets the model
+predict next tokens from text context alone, making the prefix redundant.
+Token dropout forces the model to rely on the prefix for task-specific info.
+
+Phase 1: Prefix = encode(prompt). Decoder sees generic instruction + corrupted response.
+         Labels = original response tokens. Model MUST use prefix.
 Phase 2: Prefix = encode(prompt) + encode(correction). Decoder sees generic
-         instruction + wrong partial + revised continuation. Labels = revised part.
+         instruction + corrupted partial + revised. Labels = revised part.
 """
 
 import json
@@ -38,6 +43,7 @@ class DuplexDataset(Dataset):
         max_response_len: int = 512,
         max_correction_len: int = 96,
         phase: int = 2,
+        token_dropout: float = 0.5,
     ):
         self.samples = samples
         self.tokenizer = tokenizer
@@ -45,6 +51,8 @@ class DuplexDataset(Dataset):
         self.max_response_len = max_response_len
         self.max_correction_len = max_correction_len
         self.phase = phase
+        self.token_dropout = token_dropout
+        self.pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -55,7 +63,6 @@ class DuplexDataset(Dataset):
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         s = self.samples[idx]
 
-        # Encoder input: full prompt (this goes into prefix, NOT decoder input)
         prompt_enc = self.tokenizer(
             s["prompt"],
             max_length=self.max_prompt_len,
@@ -64,8 +71,6 @@ class DuplexDataset(Dataset):
             return_tensors="pt",
         )
 
-        # Generic instruction replaces the specific prompt in decoder input.
-        # The model can ONLY get task-specific details from the prefix.
         generic = random.choice(GENERIC_INSTRUCTIONS)
 
         if self.phase == 1:
@@ -76,7 +81,6 @@ class DuplexDataset(Dataset):
                 truncation=True,
                 return_tensors="pt",
             )
-            # Decoder: generic instruction + response (NOT the actual prompt)
             response = s["partial_response"]
             full_text = generic + " " + response
             target_start_text = generic + " "
@@ -100,7 +104,6 @@ class DuplexDataset(Dataset):
             else:
                 partial_cut = ""
 
-            # Decoder: generic instruction + wrong partial + revised continuation
             full_text = generic + " " + partial_cut + " " + revised
             target_start_text = generic + " " + partial_cut + " "
 
@@ -119,16 +122,29 @@ class DuplexDataset(Dataset):
         )
         prefix_len = len(prefix_enc["input_ids"])
 
+        # Labels: original tokens (before dropout)
         labels = decoder_enc["input_ids"].clone().squeeze(0)
         labels[:prefix_len] = -100
-        labels[labels == self.tokenizer.pad_token_id] = -100
+        labels[labels == self.pad_token_id] = -100
+
+        # Token dropout: randomly replace response tokens in decoder input with pad.
+        # The generic instruction prefix is never corrupted — only the response.
+        # This prevents the model from "cheating" with teacher-forced text context
+        # and forces it to rely on the workspace prefix for task-specific info.
+        input_ids = decoder_enc["input_ids"].squeeze(0).clone()
+        if self.token_dropout > 0:
+            seq_len = input_ids.size(0)
+            dropout_mask = torch.rand(seq_len) < self.token_dropout
+            dropout_mask[:prefix_len] = False  # protect generic instruction
+            dropout_mask[input_ids == self.pad_token_id] = False  # don't corrupt padding
+            input_ids[dropout_mask] = self.pad_token_id
 
         return {
             "prompt_ids": prompt_enc["input_ids"].squeeze(0),
             "prompt_mask": prompt_enc["attention_mask"].squeeze(0),
             "update_ids": update_enc["input_ids"].squeeze(0),
             "update_mask": update_enc["attention_mask"].squeeze(0),
-            "input_ids": decoder_enc["input_ids"].squeeze(0),
+            "input_ids": input_ids,
             "attention_mask": decoder_enc["attention_mask"].squeeze(0),
             "labels": labels,
             "task_type": s["task_type"],
@@ -157,10 +173,11 @@ class DuplexDataset(Dataset):
         max_response_len: int = 512,
         max_correction_len: int = 96,
         phase: int = 2,
+        token_dropout: float = 0.5,
     ) -> "DuplexDataset":
         samples = []
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     samples.append(json.loads(line))
-        return cls(samples, tokenizer, max_prompt_len, max_response_len, max_correction_len, phase)
+        return cls(samples, tokenizer, max_prompt_len, max_response_len, max_correction_len, phase, token_dropout)
