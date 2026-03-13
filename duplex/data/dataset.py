@@ -1,5 +1,5 @@
 """
-Dataset for Duplex-1.3 training (prefix conditioning architecture).
+Dataset for Duplex-1.4 training (deep prefix conditioning / P-Tuning v2).
 
 Key design: the prompt is ONLY available through the prefix (workspace).
 The decoder input contains only a generic instruction + the response.

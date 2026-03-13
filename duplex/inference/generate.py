@@ -36,6 +36,8 @@ def load_duplex_model(
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
     model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
+    if "deep_prefix_state_dict" in ckpt:
+        model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
 
     model.eval()
     return model

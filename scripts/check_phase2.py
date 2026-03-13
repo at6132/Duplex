@@ -1,5 +1,5 @@
 """
-Quick Phase 2 verification for Duplex-1.3.
+Quick Phase 2 verification for Duplex-1.4.
 
 Loads Duplex, runs 4 targeted correction scenarios, checks whether
 the corrected entity appears in the output and the old entity is gone.
@@ -14,7 +14,7 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 import torch
 from duplex.inference.generate import load_duplex_model
 
-CKPT = "checkpoints/duplex-1.3-1.7b/phase2_best.pt"
+CKPT = "checkpoints/duplex-1.4-1.7b/phase2_best.pt"
 QWEN = "models/qwen3-1.7b-base"
 
 CHECKS = [
@@ -69,7 +69,7 @@ def run():
     model.eval()
     print("Loaded.\n")
 
-    print(f"Architecture: prefix conditioning (v1.3)")
+    print(f"Architecture: deep prefix conditioning / P-Tuning v2")
     print(f"Trainable params: {model.trainable_param_count():,}")
     print(f"Prefix slots: {model.config.n_workspace_slots}")
     print(f"Decoder input: GENERIC instruction ('{model.GENERIC_INSTRUCTION}')\n")

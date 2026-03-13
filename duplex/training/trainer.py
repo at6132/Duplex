@@ -138,6 +138,7 @@ class DuplexTrainer:
         torch.save({
             "encoder_state_dict": self.raw_model.encoder.state_dict(),
             "workspace_state_dict": self.raw_model.workspace.state_dict(),
+            "deep_prefix_state_dict": self.raw_model.deep_prefix.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "global_step": self.global_step,
             "config": self.config,
@@ -147,6 +148,8 @@ class DuplexTrainer:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.raw_model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
         self.raw_model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
+        if "deep_prefix_state_dict" in ckpt:
+            self.raw_model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
         try:
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         except (ValueError, KeyError):
@@ -202,7 +205,7 @@ class DuplexTrainer:
                          * self.config.gradient_accumulation_steps
                          * self.world_size)
             print(f"\n{'='*60}")
-            print(f"  Training Duplex-1.3-1.7B | Phase {phase}")
+            print(f"  Training Duplex-1.4-1.7B | Phase {phase}")
             print(f"{'='*60}")
             print(f"  GPUs: {self.world_size} | Batch/GPU: {self.config.batch_size} | "
                   f"Grad accum: {self.config.gradient_accumulation_steps} | "
