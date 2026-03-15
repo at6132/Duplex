@@ -225,14 +225,14 @@ class DuplexTrainer:
         accum_count = 0
         epoch = 0
 
-        # Convergence: sliding window of recent losses for plateau detection.
-        # EMA alpha=0.4 catches up quickly; patience=12 intervals ~= 300 steps.
+        # Convergence detection: only active AFTER warmup completes (LR spike
+        # during warmup can cause false plateau detection).
         ema_loss = None
         ema_alpha = 0.4
         best_ema = float("inf")
-        plateau_patience = 12       # log intervals with no improvement
+        plateau_patience = 20       # log intervals with no improvement (~500 steps)
         plateau_counter = 0
-        plateau_min_delta = 1e-3    # must improve by at least this
+        plateau_min_delta = 1e-3
 
         # Best checkpoint tracking (based on val_loss)
         best_val_loss = float("inf")
@@ -287,21 +287,22 @@ class DuplexTrainer:
                             f"{tokens_per_sec/1000:.1f}k tok/s"
                         )
 
-                        # EMA-based convergence detection (much more stable than raw loss)
-                        if ema_loss is None:
-                            ema_loss = avg_loss
-                        else:
-                            ema_loss = ema_alpha * avg_loss + (1 - ema_alpha) * ema_loss
+                        # EMA-based convergence detection — only after warmup
+                        if self.global_step > self.config.warmup_steps:
+                            if ema_loss is None:
+                                ema_loss = avg_loss
+                            else:
+                                ema_loss = ema_alpha * avg_loss + (1 - ema_alpha) * ema_loss
 
-                        if ema_loss < best_ema - plateau_min_delta:
-                            best_ema = ema_loss
-                            plateau_counter = 0
-                        else:
-                            plateau_counter += 1
-                            if plateau_counter >= plateau_patience:
-                                print(f"\nConverged -- EMA loss flat for {plateau_patience} "
-                                      f"log intervals (EMA={ema_loss:.5f}). Stopping.")
-                                self._stop_requested = True
+                            if ema_loss < best_ema - plateau_min_delta:
+                                best_ema = ema_loss
+                                plateau_counter = 0
+                            else:
+                                plateau_counter += 1
+                                if plateau_counter >= plateau_patience:
+                                    print(f"\nConverged -- EMA loss flat for {plateau_patience} "
+                                          f"log intervals (EMA={ema_loss:.5f}). Stopping.")
+                                    self._stop_requested = True
 
                         running_loss = 0.0
                         n_accumulated = 0
