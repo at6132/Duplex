@@ -83,7 +83,8 @@ class DuplexDataset(Dataset):
             )
             response = s["partial_response"]
             full_text = generic + " " + response
-            target_start_text = generic + " "
+            non_target = generic + " "
+            prefix_len = len(self.tokenizer(non_target, add_special_tokens=True)["input_ids"])
         else:
             update_enc = self.tokenizer(
                 s.get("correction", ""),
@@ -105,7 +106,10 @@ class DuplexDataset(Dataset):
                 partial_cut = ""
 
             full_text = generic + " " + partial_cut + " " + revised
-            target_start_text = generic + " " + partial_cut + " "
+            # Tokenize the non-target prefix to get exact length
+            non_target = generic + " " + partial_cut + " "
+            non_target_ids = self.tokenizer(non_target, add_special_tokens=True)["input_ids"]
+            prefix_len = len(non_target_ids)
 
         decoder_enc = self.tokenizer(
             full_text,
@@ -114,13 +118,6 @@ class DuplexDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         )
-
-        prefix_enc = self.tokenizer(
-            target_start_text,
-            max_length=self.max_response_len,
-            truncation=True,
-        )
-        prefix_len = len(prefix_enc["input_ids"])
 
         # Labels: original tokens (before dropout)
         labels = decoder_enc["input_ids"].clone().squeeze(0)

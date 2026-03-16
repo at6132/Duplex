@@ -285,15 +285,20 @@ def generate_topic_redirect() -> dict[str, Any]:
 def generate_constraint_revision() -> dict[str, Any]:
     old_budget = random.choice([100, 200, 500, 1000, 2000, 5000])
     new_budget = random.choice([b for b in [50, 100, 200, 500, 1000] if b < old_budget])
-    old_count = random.randint(3, 10)
+    old_count = random.randint(3, 6)
     new_count = random.randint(1, old_count - 1)
+
+    ITEM_POOL = [
+        "A quality pair of headphones", "A nice backpack", "Several good books",
+        "A portable speaker", "A fitness tracker", "A coffee maker",
+        "A desk lamp", "A water bottle", "A journal set", "A phone case",
+    ]
+    items = random.sample(ITEM_POOL, old_count)
 
     prompt = f"List {old_count} items I can buy with a ${old_budget} budget."
     partial_response = (
         f"Here are {old_count} items you can buy with ${old_budget}:\n"
-        f"1. A quality pair of headphones\n"
-        f"2. A nice backpack\n"
-        f"3. Several good books"
+        + "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
     )
     correction = f"Actually, my budget is only ${new_budget} and I need just {new_count} items."
     revised = (
@@ -314,19 +319,33 @@ def generate_constraint_revision() -> dict[str, Any]:
     }
 
 
+HELLO_WORLD_SNIPPETS = {
+    "Python": 'def hello():\n    print("Hello, World!")',
+    "JavaScript": 'function hello() {\n  console.log("Hello, World!");\n}',
+    "Rust": 'fn main() {\n    println!("Hello, World!");\n}',
+    "Go": 'func main() {\n    fmt.Println("Hello, World!")\n}',
+    "TypeScript": 'function hello(): void {\n  console.log("Hello, World!");\n}',
+    "Java": 'public class Hello {\n    public static void main(String[] args) {\n        System.out.println("Hello, World!");\n    }\n}',
+    "C++": '#include <iostream>\nint main() {\n    std::cout << "Hello, World!" << std::endl;\n    return 0;\n}',
+    "Ruby": 'def hello\n  puts "Hello, World!"\nend',
+}
+
+
 def generate_language_switch() -> dict[str, Any]:
     lang1 = random.choice(LANGUAGES)
     lang2 = random.choice([l for l in LANGUAGES if l != lang1])
 
+    code1 = HELLO_WORLD_SNIPPETS.get(lang1, f'print("Hello, World!")  # {lang1}')
+    code2 = HELLO_WORLD_SNIPPETS.get(lang2, f'print("Hello, World!")  # {lang2}')
+
     prompt = f"Write a simple hello world function in {lang1}."
     partial_response = (
-        f"Here's a hello world function in {lang1}:\n"
-        f"function hello() {{ print(\"Hello, World!\") }}"
+        f"Here's a hello world function in {lang1}:\n{code1}"
     )
     correction = f"Actually, please write it in {lang2} instead of {lang1}."
     revised = (
         f"{_ack()} {RS}Here's the hello world function in {lang2}:\n"
-        f"function hello() {{ print(\"Hello, World!\") }}{RE}\n"
+        f"{code2}{RE}\n"
         f"This is a basic hello world implementation in {lang2}."
     )
 
