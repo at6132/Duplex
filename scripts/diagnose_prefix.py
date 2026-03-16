@@ -103,13 +103,13 @@ def main():
     def get_kv(cache, layer_idx):
         if hasattr(cache, 'key_cache'):
             return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
-        if hasattr(cache, '_key_cache'):
-            return cache._key_cache[layer_idx], cache._value_cache[layer_idx]
-        # Fallback: try to_legacy_cache
-        legacy = cache.to_legacy_cache() if hasattr(cache, 'to_legacy_cache') else None
-        if legacy is not None:
-            return legacy[layer_idx][0], legacy[layer_idx][1]
-        raise RuntimeError(f"Cannot access DynamicCache internals. Attrs: {dir(cache)}")
+        if hasattr(cache, 'layers'):
+            layer = cache.layers[layer_idx]
+            if hasattr(layer, 'key_cache'):
+                return layer.key_cache, layer.value_cache
+            if isinstance(layer, (list, tuple)):
+                return layer[0], layer[1]
+        raise RuntimeError(f"Cannot access DynamicCache. Layer attrs: {dir(cache.layers[0]) if hasattr(cache, 'layers') else 'no layers'}")
 
     for layer_idx in [0, 13, 27]:
         print(f"\n  Layer {layer_idx}:")
