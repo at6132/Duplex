@@ -105,11 +105,11 @@ def main():
             return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
         if hasattr(cache, 'layers'):
             layer = cache.layers[layer_idx]
+            if hasattr(layer, 'keys'):
+                return layer.keys, layer.values
             if hasattr(layer, 'key_cache'):
                 return layer.key_cache, layer.value_cache
-            if isinstance(layer, (list, tuple)):
-                return layer[0], layer[1]
-        raise RuntimeError(f"Cannot access DynamicCache. Layer attrs: {dir(cache.layers[0]) if hasattr(cache, 'layers') else 'no layers'}")
+        raise RuntimeError(f"Cannot access DynamicCache layer {layer_idx}")
 
     for layer_idx in [0, 13, 27]:
         print(f"\n  Layer {layer_idx}:")
