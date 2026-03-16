@@ -38,6 +38,10 @@ def load_duplex_model(
     model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
     if "deep_prefix_state_dict" in ckpt:
         model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
+    if "lora_state_dict" in ckpt:
+        for name, param in model.qwen.named_parameters():
+            if name in ckpt["lora_state_dict"]:
+                param.data.copy_(ckpt["lora_state_dict"][name])
 
     model.eval()
     return model

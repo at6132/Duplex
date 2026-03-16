@@ -69,7 +69,7 @@ def run():
     model.eval()
     print("Loaded.\n")
 
-    print(f"Architecture: deep prefix conditioning / P-Tuning v2")
+    print(f"Architecture: deep prefix + LoRA (Q/V, r=16)")
     print(f"Trainable params: {model.trainable_param_count():,}")
     print(f"Prefix slots: {model.config.n_workspace_slots}")
     print(f"Decoder input: GENERIC instruction ('{model.GENERIC_INSTRUCTION}')\n")

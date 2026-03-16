@@ -23,6 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import DynamicCache
+from peft import get_peft_model, LoraConfig, TaskType
 
 from .workspace import WorkspaceModule
 from .encoder import UpdateEncoder
@@ -97,6 +98,15 @@ class DuplexModel(nn.Module):
         )
         for param in self.qwen.parameters():
             param.requires_grad = False
+
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "v_proj"],
+        )
+        self.qwen = get_peft_model(self.qwen, lora_config)
 
         encoder_head_dim = config.encoder_dim // config.adapter_n_heads
         self.encoder = UpdateEncoder(
@@ -356,6 +366,9 @@ class DuplexModel(nn.Module):
         params.extend(self.encoder.parameters())
         params.extend(self.workspace.parameters())
         params.extend(self.deep_prefix.parameters())
+        for name, p in self.qwen.named_parameters():
+            if p.requires_grad:
+                params.append(p)
         return params
 
     def trainable_param_count(self) -> int:
@@ -373,4 +386,6 @@ class DuplexModel(nn.Module):
         print(f"Frozen params:    {frozen:>12,}")
         print(f"Trainable %:      {100 * trainable / total:>11.1f}%")
         print(f"Prefix slots:     {self.config.n_workspace_slots}")
-        print(f"Architecture:     deep prefix conditioning / P-Tuning v2 (Qwen fully frozen)")
+        lora_params = sum(p.numel() for n, p in self.qwen.named_parameters() if p.requires_grad)
+        print(f"LoRA params:      {lora_params:>12,}")
+        print(f"Architecture:     deep prefix + LoRA (Q/V, r=16)")

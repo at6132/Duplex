@@ -131,6 +131,9 @@ class DuplexTrainer:
             avg = t.item()
         return avg
 
+    def _get_lora_state_dict(self):
+        return {n: p.data for n, p in self.raw_model.qwen.named_parameters() if p.requires_grad}
+
     def save_checkpoint(self, path: str):
         if not self.is_main:
             return
@@ -139,6 +142,7 @@ class DuplexTrainer:
             "encoder_state_dict": self.raw_model.encoder.state_dict(),
             "workspace_state_dict": self.raw_model.workspace.state_dict(),
             "deep_prefix_state_dict": self.raw_model.deep_prefix.state_dict(),
+            "lora_state_dict": self._get_lora_state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "global_step": self.global_step,
             "config": self.config,
@@ -150,6 +154,12 @@ class DuplexTrainer:
         self.raw_model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
         if "deep_prefix_state_dict" in ckpt:
             self.raw_model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
+        if "lora_state_dict" in ckpt:
+            for name, param in self.raw_model.qwen.named_parameters():
+                if name in ckpt["lora_state_dict"]:
+                    param.data.copy_(ckpt["lora_state_dict"][name])
+                elif param.requires_grad:
+                    pass
         try:
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         except (ValueError, KeyError):
