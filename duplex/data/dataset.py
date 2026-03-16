@@ -73,7 +73,14 @@ class DuplexDataset(Dataset):
 
         generic = random.choice(GENERIC_INSTRUCTIONS)
 
-        if self.phase == 1:
+        # Joint training: in Phase 2, randomly treat 40% of samples as Phase 1
+        # (prompt-only, no correction). This prevents catastrophic forgetting of
+        # prompt conditioning learned in Phase 1.
+        effective_phase = self.phase
+        if self.phase == 2 and random.random() < 0.4:
+            effective_phase = 1
+
+        if effective_phase == 1:
             update_enc = self.tokenizer(
                 "",
                 max_length=self.max_correction_len,
@@ -106,7 +113,6 @@ class DuplexDataset(Dataset):
                 partial_cut = ""
 
             full_text = generic + " " + partial_cut + " " + revised
-            # Tokenize the non-target prefix to get exact length
             non_target = generic + " " + partial_cut + " "
             non_target_ids = self.tokenizer(non_target, add_special_tokens=True)["input_ids"]
             prefix_len = len(non_target_ids)
