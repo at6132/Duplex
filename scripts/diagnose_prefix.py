@@ -31,9 +31,14 @@ PROMPTS = [
 
 
 def cosine_sim(a, b):
-    a_flat = a.reshape(-1).float()
-    b_flat = b.reshape(-1).float()
-    return F.cosine_similarity(a_flat.unsqueeze(0), b_flat.unsqueeze(0)).item()
+    """Cosine similarity between two tensors, mean-pooled if different sizes."""
+    if a.shape != b.shape:
+        a_vec = a.float().mean(dim=1).reshape(-1)
+        b_vec = b.float().mean(dim=1).reshape(-1)
+    else:
+        a_vec = a.reshape(-1).float()
+        b_vec = b.reshape(-1).float()
+    return F.cosine_similarity(a_vec.unsqueeze(0), b_vec.unsqueeze(0)).item()
 
 
 def main():
