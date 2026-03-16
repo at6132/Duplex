@@ -100,14 +100,18 @@ def main():
     print("  STEP 3: Deep prefix K/V — different per prompt?")
     print(f"{'='*70}")
 
+    def get_kv(cache, layer_idx):
+        if hasattr(cache, 'key_cache'):
+            return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
+        kv = cache[layer_idx]
+        return kv[0], kv[1]
+
     for layer_idx in [0, 13, 27]:
         print(f"\n  Layer {layer_idx}:")
         for i in range(len(PROMPTS)):
             for j in range(i+1, len(PROMPTS)):
-                ki = prefix_caches[i].key_cache[layer_idx]
-                kj = prefix_caches[j].key_cache[layer_idx]
-                vi = prefix_caches[i].value_cache[layer_idx]
-                vj = prefix_caches[j].value_cache[layer_idx]
+                ki, vi = get_kv(prefix_caches[i], layer_idx)
+                kj, vj = get_kv(prefix_caches[j], layer_idx)
                 k_sim = cosine_sim(ki, kj)
                 v_sim = cosine_sim(vi, vj)
                 print(f"    Prompt {i} vs {j}: K_sim={k_sim:.4f}, V_sim={v_sim:.4f}")
