@@ -43,7 +43,7 @@ class DuplexDataset(Dataset):
         max_response_len: int = 512,
         max_correction_len: int = 96,
         phase: int = 2,
-        token_dropout: float = 0.5,
+        token_dropout: float = 0.8,
     ):
         self.samples = samples
         self.tokenizer = tokenizer
@@ -176,7 +176,7 @@ class DuplexDataset(Dataset):
         max_response_len: int = 512,
         max_correction_len: int = 96,
         phase: int = 2,
-        token_dropout: float = 0.5,
+        token_dropout: float = 0.8,
     ) -> "DuplexDataset":
         samples = []
         with open(path, "r", encoding="utf-8") as f:
