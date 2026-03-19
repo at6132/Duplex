@@ -118,6 +118,16 @@ class DuplexModel(nn.Module):
             n_layers=config.n_encoder_layers,
             dropout=config.adapter_dropout,
         )
+        # Use Qwen's pretrained embeddings instead of random ones.
+        # The encoder's own embedding table (155M params) could never learn English
+        # semantics from 500K synthetic samples. Qwen's embeddings already know.
+        # Navigate through PEFT wrapper to get the actual embed_tokens
+        if hasattr(self.qwen, 'base_model'):
+            qwen_base = self.qwen.base_model.model.model
+        else:
+            qwen_base = self.qwen.model
+        embed_layer = qwen_base.embed_tokens
+        self.encoder.use_external_embeddings(embed_layer)
         if config.encoder_dim != config.workspace_dim:
             self.encoder.set_output_projection(config.workspace_dim)
 

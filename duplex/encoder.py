@@ -73,9 +73,11 @@ class UpdateEncoder(nn.Module):
         dropout: float = 0.05,
     ):
         super().__init__()
+        self.d_model = d_model
         self.embed = nn.Embedding(vocab_size, d_model)
+        self._external_embed = None
+        self._input_proj = None
 
-        # Sinusoidal positional encoding
         pe = torch.zeros(max_seq_len, d_model)
         position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
@@ -92,12 +94,21 @@ class UpdateEncoder(nn.Module):
         self.ln_final = nn.RMSNorm(d_model, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
 
-        # Optional projection to a different output dim (e.g. d_model=1024 -> workspace_dim=2048)
         self.output_proj = None
 
+    def use_external_embeddings(self, embed_layer: nn.Embedding):
+        """Use pretrained embeddings (e.g. from Qwen) instead of random ones.
+
+        The external embeddings stay frozen. If their dim differs from d_model,
+        a trainable projection is added.
+        """
+        self._external_embed = embed_layer
+        ext_dim = embed_layer.embedding_dim
+        if ext_dim != self.d_model:
+            self._input_proj = nn.Linear(ext_dim, self.d_model, bias=False)
+
     def set_output_projection(self, target_dim: int):
-        """Add a linear projection from encoder dim to target dim."""
-        d_model = self.embed.embedding_dim
+        d_model = self.d_model
         if d_model != target_dim:
             self.output_proj = nn.Linear(d_model, target_dim, bias=False)
 
@@ -106,15 +117,14 @@ class UpdateEncoder(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """
-        Args:
-            input_ids: (B, T) token IDs
-            attention_mask: (B, T), 1=real 0=pad
+        if self._external_embed is not None:
+            with torch.no_grad():
+                x = self._external_embed(input_ids)
+            if self._input_proj is not None:
+                x = self._input_proj(x)
+        else:
+            x = self.embed(input_ids)
 
-        Returns:
-            (B, T, D) encoded representations
-        """
-        x = self.embed(input_ids)
         x = x + self.pe[:, :x.size(1)]
         x = self.dropout(x)
 
