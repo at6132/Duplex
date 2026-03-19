@@ -71,15 +71,20 @@ CHECKS = [
 
 
 def run():
-    if not os.path.exists(CKPT):
-        alt = CKPT.replace("phase2_best", "final")
-        if os.path.exists(alt):
-            ckpt = alt
-        else:
-            print(f"ERROR: No checkpoint found at {CKPT}")
-            sys.exit(1)
-    else:
-        ckpt = CKPT
+    candidates = [
+        CKPT,
+        CKPT.replace("phase2_best", "final"),
+        CKPT.replace("phase2_best", "phase1_best"),
+        CKPT.replace("phase2_best", "phase1_final"),
+    ]
+    ckpt = None
+    for c in candidates:
+        if os.path.exists(c):
+            ckpt = c
+            break
+    if ckpt is None:
+        print(f"ERROR: No checkpoint found. Tried: {candidates}")
+        sys.exit(1)
 
     print(f"Loading Duplex from {ckpt} ...")
     model = load_duplex_model(QWEN, ckpt)
