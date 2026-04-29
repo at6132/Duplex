@@ -97,12 +97,14 @@ class UpdateEncoder(nn.Module):
         self.output_proj = None
 
     def use_external_embeddings(self, embed_layer: nn.Embedding):
-        """Use pretrained embeddings (e.g. from Qwen) instead of random ones.
+        """Use pretrained embeddings (e.g. from Gemma) instead of random ones.
 
         The external embeddings stay frozen. If their dim differs from d_model,
-        a trainable projection is added.
+        a trainable projection is added. The internal embedding table is frozen
+        since it's no longer used (saves massive optimizer memory).
         """
         self._external_embed = embed_layer
+        self.embed.requires_grad_(False)
         ext_dim = embed_layer.embedding_dim
         if ext_dim != self.d_model:
             self._input_proj = nn.Linear(ext_dim, self.d_model, bias=False)

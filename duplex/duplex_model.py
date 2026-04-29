@@ -20,40 +20,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.cache_utils import DynamicCache
 from peft import get_peft_model, LoraConfig, TaskType
 
 from .workspace import WorkspaceModule
 from .encoder import UpdateEncoder
 from .config import DuplexConfig, REVISION_MARKERS
 
-
-class DeepPrefixEncoder(nn.Module):
-    """Projects workspace slots into per-layer K/V pairs for all backbone layers."""
-
-    def __init__(self, n_prefix: int, n_layers: int, n_kv_heads: int, head_dim: int, input_dim: int):
-        super().__init__()
-        self.n_prefix = n_prefix
-        self.n_layers = n_layers
-        self.n_kv_heads = n_kv_heads
-        self.head_dim = head_dim
-        self.kv_dim = n_kv_heads * head_dim
-
-        self.kv_projs = nn.ModuleList([
-            nn.Linear(input_dim, 2 * self.kv_dim, bias=False)
-            for _ in range(n_layers)
-        ])
-
-    def forward(self, prefix_embeds: torch.Tensor) -> DynamicCache:
-        B, P, _ = prefix_embeds.shape
-        cache = DynamicCache()
-        for layer_idx in range(self.n_layers):
-            kv = self.kv_projs[layer_idx](prefix_embeds)
-            k, v = kv.chunk(2, dim=-1)
-            k = k.view(B, P, self.n_kv_heads, self.head_dim).transpose(1, 2).contiguous()
-            v = v.view(B, P, self.n_kv_heads, self.head_dim).transpose(1, 2).contiguous()
-            cache.update(k, v, layer_idx)
-        return cache
 
 
 class DuplexModel(nn.Module):
@@ -113,10 +85,14 @@ class DuplexModel(nn.Module):
             n_layers=config.n_encoder_layers,
             dropout=config.adapter_dropout,
         )
-        if hasattr(self.backbone, 'base_model'):
-            embed_layer = self.backbone.base_model.model.model.embed_tokens
-        else:
-            embed_layer = self.backbone.model.embed_tokens
+        # Find embed_tokens through the model hierarchy (handles PEFT wrapper + Gemma3 multimodal)
+        embed_layer = None
+        for name, module in self.backbone.named_modules():
+            if name.endswith('embed_tokens') and isinstance(module, torch.nn.Embedding):
+                embed_layer = module
+                break
+        if embed_layer is None:
+            raise RuntimeError("Could not find embed_tokens in backbone")
         self.encoder.use_external_embeddings(embed_layer)
         if config.encoder_dim != config.workspace_dim:
             self.encoder.set_output_projection(config.workspace_dim)
@@ -129,17 +105,15 @@ class DuplexModel(nn.Module):
             dropout=config.adapter_dropout,
         )
 
-        self.deep_prefix = DeepPrefixEncoder(
-            n_prefix=config.n_workspace_slots,
-            n_layers=config.n_decoder_layers,
-            n_kv_heads=config.n_kv_heads,
-            head_dim=config.head_dim,
-            input_dim=config.workspace_dim,
-        )
+        # Project workspace (2560d) to backbone embed dim for input-level prefix.
+        # With LoRA teaching the backbone to attend to prefix + instruction-tuned
+        # Gemma already knowing prompt-following, input-level prefix is sufficient.
+        backbone_embed_dim = embed_layer.embedding_dim
+        self.deep_prefix_to_embed = nn.Linear(config.workspace_dim, backbone_embed_dim, bias=False)
 
         self.encoder = self.encoder.to(device=device_str, dtype=torch.bfloat16)
         self.workspace = self.workspace.to(device=device_str, dtype=torch.bfloat16)
-        self.deep_prefix = self.deep_prefix.to(device=device_str, dtype=torch.bfloat16)
+        self.deep_prefix_to_embed = self.deep_prefix_to_embed.to(device=device_str, dtype=torch.bfloat16)
 
     def _encode_and_update_workspace(
         self,
@@ -151,8 +125,16 @@ class DuplexModel(nn.Module):
         ws = self.workspace(encoder_output, encoder_mask=text_mask, workspace=workspace)
         return ws, encoder_output
 
-    def _build_deep_cache(self, workspace: torch.Tensor) -> DynamicCache:
-        return self.deep_prefix(workspace)
+    def _build_prefix_embeds(self, workspace: torch.Tensor) -> torch.Tensor:
+        """Project workspace slots to backbone embedding space."""
+        return self.deep_prefix_to_embed(workspace)
+
+    def _get_embed_layer(self):
+        """Get the backbone's token embedding layer through any wrappers."""
+        for name, module in self.backbone.named_modules():
+            if name.endswith('embed_tokens') and isinstance(module, torch.nn.Embedding):
+                return module
+        raise RuntimeError("Could not find embed_tokens")
 
     def forward(
         self,
@@ -177,21 +159,31 @@ class DuplexModel(nn.Module):
         if ws is not None:
             B = input_ids.size(0)
             n_prefix = ws.size(1)
-            prefix_cache = self._build_deep_cache(ws)
+
+            # Project workspace to backbone's embedding dim and prepend as soft tokens
+            prefix = self.deep_prefix_to_embed(ws)
+            embed_layer = self._get_embed_layer()
+            with torch.no_grad():
+                input_embeds = embed_layer(input_ids)
+            input_embeds = input_embeds.to(prefix.dtype)
+            combined_embeds = torch.cat([prefix, input_embeds], dim=1)
 
             if attention_mask is not None:
-                prefix_mask = torch.ones(
-                    B, n_prefix, device=input_ids.device, dtype=attention_mask.dtype
-                )
-                extended_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+                prefix_mask = torch.ones(B, n_prefix, device=input_ids.device, dtype=attention_mask.dtype)
+                combined_mask = torch.cat([prefix_mask, attention_mask], dim=1)
             else:
-                extended_mask = None
+                combined_mask = None
+
+            if labels is not None:
+                prefix_labels = torch.full((B, n_prefix), -100, device=labels.device, dtype=labels.dtype)
+                combined_labels = torch.cat([prefix_labels, labels], dim=1)
+            else:
+                combined_labels = None
 
             outputs = self.backbone(
-                input_ids=input_ids,
-                attention_mask=extended_mask,
-                past_key_values=prefix_cache,
-                labels=labels,
+                inputs_embeds=combined_embeds,
+                attention_mask=combined_mask,
+                labels=combined_labels,
             )
         else:
             outputs = self.backbone(
@@ -233,8 +225,9 @@ class DuplexModel(nn.Module):
         ).to(device)
         generated_ids = generic_enc["input_ids"].clone()
         generic_len = generated_ids.size(1)
-        n_prefix = ws.size(1)
         text_at_correction = None
+
+        embed_layer = self._get_embed_layer()
 
         for step in range(max_new_tokens):
             if (correction_enc is not None
@@ -250,19 +243,11 @@ class DuplexModel(nn.Module):
                     encoder_mask=correction_enc["attention_mask"],
                     workspace=ws,
                 )
-                n_prefix = ws.size(1)
 
-            prefix_cache = self._build_deep_cache(ws)
-            seq_len = generated_ids.size(1)
-            prefix_mask = torch.ones(1, n_prefix, device=device, dtype=torch.long)
-            text_mask = torch.ones(1, seq_len, device=device, dtype=torch.long)
-            attn_mask = torch.cat([prefix_mask, text_mask], dim=1)
-
-            outputs = self.backbone(
-                input_ids=generated_ids,
-                attention_mask=attn_mask,
-                past_key_values=prefix_cache,
-            )
+            prefix = self._build_prefix_embeds(ws)
+            input_embeds = embed_layer(generated_ids).to(prefix.dtype)
+            combined = torch.cat([prefix, input_embeds], dim=1)
+            outputs = self.backbone(inputs_embeds=combined)
 
             next_logits = outputs.logits[:, -1, :] / max(temperature, 1e-5)
             probs = F.softmax(next_logits, dim=-1)
@@ -311,7 +296,8 @@ class DuplexModel(nn.Module):
         ).to(device)
         generated_ids = generic_enc["input_ids"].clone()
         generic_len = generated_ids.size(1)
-        n_prefix = ws.size(1)
+
+        embed_layer = self._get_embed_layer()
 
         for step in range(max_new_tokens):
             if (correction_enc is not None
@@ -329,19 +315,11 @@ class DuplexModel(nn.Module):
                     encoder_mask=correction_enc["attention_mask"],
                     workspace=ws,
                 )
-                n_prefix = ws.size(1)
 
-            prefix_cache = self._build_deep_cache(ws)
-            seq_len = generated_ids.size(1)
-            prefix_mask = torch.ones(1, n_prefix, device=device, dtype=torch.long)
-            text_mask = torch.ones(1, seq_len, device=device, dtype=torch.long)
-            attn_mask = torch.cat([prefix_mask, text_mask], dim=1)
-
-            outputs = self.backbone(
-                input_ids=generated_ids,
-                attention_mask=attn_mask,
-                past_key_values=prefix_cache,
-            )
+            prefix = self._build_prefix_embeds(ws)
+            input_embeds = embed_layer(generated_ids).to(prefix.dtype)
+            combined = torch.cat([prefix, input_embeds], dim=1)
+            outputs = self.backbone(inputs_embeds=combined)
 
             next_logits = outputs.logits[:, -1, :] / max(temperature, 1e-5)
             probs = F.softmax(next_logits, dim=-1)
@@ -356,9 +334,15 @@ class DuplexModel(nn.Module):
 
     def get_trainable_params(self) -> list[nn.Parameter]:
         params = []
-        params.extend(self.encoder.parameters())
-        params.extend(self.workspace.parameters())
-        params.extend(self.deep_prefix.parameters())
+        for p in self.encoder.parameters():
+            if p.requires_grad:
+                params.append(p)
+        for p in self.workspace.parameters():
+            if p.requires_grad:
+                params.append(p)
+        for p in self.deep_prefix_to_embed.parameters():
+            if p.requires_grad:
+                params.append(p)
         for name, p in self.backbone.named_parameters():
             if p.requires_grad:
                 params.append(p)

@@ -37,7 +37,7 @@ def load_duplex_model(checkpoint_path: str, model_path: str = None) -> DuplexMod
     model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
     model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
     if "deep_prefix_state_dict" in ckpt:
-        model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
+        model.deep_prefix_to_embed.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
     if "lora_state_dict" in ckpt:
         for name, param in model.backbone.named_parameters():
             if name in ckpt["lora_state_dict"]:

@@ -141,7 +141,7 @@ class DuplexTrainer:
         torch.save({
             "encoder_state_dict": self.raw_model.encoder.state_dict(),
             "workspace_state_dict": self.raw_model.workspace.state_dict(),
-            "deep_prefix_state_dict": self.raw_model.deep_prefix.state_dict(),
+            "deep_prefix_state_dict": self.raw_model.deep_prefix_to_embed.state_dict(),
             "lora_state_dict": self._get_lora_state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "global_step": self.global_step,
@@ -153,7 +153,7 @@ class DuplexTrainer:
         self.raw_model.encoder.load_state_dict(ckpt["encoder_state_dict"], strict=False)
         self.raw_model.workspace.load_state_dict(ckpt["workspace_state_dict"], strict=False)
         if "deep_prefix_state_dict" in ckpt:
-            self.raw_model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
+            self.raw_model.deep_prefix_to_embed.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
         if "lora_state_dict" in ckpt:
             for name, param in self.raw_model.backbone.named_parameters():
                 if name in ckpt["lora_state_dict"]:
@@ -183,7 +183,12 @@ class DuplexTrainer:
         train_sampler = DistributedSampler(train_dataset, shuffle=True) if self.is_ddp else None
         val_sampler = DistributedSampler(val_dataset, shuffle=False) if self.is_ddp else None
 
-        n_workers = min(8, os.cpu_count() or 4)
+        n_workers = 0 if not self.is_ddp else min(4, os.cpu_count() or 2)
+        loader_kwargs = {"pin_memory": True}
+        if n_workers > 0:
+            loader_kwargs["prefetch_factor"] = 2
+            loader_kwargs["persistent_workers"] = True
+
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
@@ -191,9 +196,7 @@ class DuplexTrainer:
             shuffle=(train_sampler is None),
             collate_fn=DuplexDataset.collate_fn,
             num_workers=n_workers,
-            pin_memory=True,
-            prefetch_factor=2,
-            persistent_workers=True,
+            **loader_kwargs,
         )
         val_loader = DataLoader(
             val_dataset,
@@ -202,9 +205,7 @@ class DuplexTrainer:
             shuffle=False,
             collate_fn=DuplexDataset.collate_fn,
             num_workers=n_workers,
-            pin_memory=True,
-            prefetch_factor=2,
-            persistent_workers=True,
+            **loader_kwargs,
         )
 
         ckpt_dir = self.config.checkpoint_dir
