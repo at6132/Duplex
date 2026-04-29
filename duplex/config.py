@@ -1,33 +1,29 @@
 from dataclasses import dataclass, field
 
-# Revision markers using EXISTING tokens Qwen already knows.
-# No new token embeddings needed — the frozen lm_head can already produce these.
-# The renderer strips these markers and applies the revision to the display.
 REVISION_MARKERS = {
     "revise_start": "[[REVISE:",
     "revise_end": "]]",
     "insert": "[[INSERT:",
 }
 
-# Legacy alias for backward compatibility
 SPECIAL_TOKENS = REVISION_MARKERS
 
 
 @dataclass
 class DuplexConfig:
-    # Qwen3-1.7B-Base architecture (must match)
-    d_model: int = 2048
+    # Gemma 3 4B-IT architecture
+    d_model: int = 2560
     n_heads: int = 16
     n_kv_heads: int = 8
-    head_dim: int = 128
-    n_decoder_layers: int = 28
-    intermediate_size: int = 6144
-    vocab_size: int = 151936
-    max_seq_len: int = 4096
+    head_dim: int = 256
+    n_decoder_layers: int = 34
+    intermediate_size: int = 10240
+    vocab_size: int = 262144
+    max_seq_len: int = 8192
 
     # Workspace (high-level context conditioning)
     n_workspace_slots: int = 32
-    workspace_dim: int = 2048
+    workspace_dim: int = 2560
 
     # Update Encoder
     n_encoder_layers: int = 4
@@ -39,14 +35,14 @@ class DuplexConfig:
     adapter_dropout: float = 0.05
 
     # Model paths & precision
-    qwen_model_path: str = "models/qwen3-1.7b-base"
-    quantize_4bit: bool = False
+    model_path: str = "google/gemma-3-4b-it"
+    quantize_4bit: bool = True
 
 
 @dataclass
 class TrainingConfig:
-    batch_size: int = 32
-    gradient_accumulation_steps: int = 4
+    batch_size: int = 1
+    gradient_accumulation_steps: int = 32
     learning_rate: float = 3e-4
     weight_decay: float = 0.01
     max_steps: int = 100000
@@ -54,13 +50,13 @@ class TrainingConfig:
     log_every: int = 25
     eval_every: int = 1000
     save_every: int = 5000
-    checkpoint_dir: str = "checkpoints/duplex-1.4-1.7b"
+    checkpoint_dir: str = "checkpoints/duplex-1.5-4b"
     phase: int = 1
     grad_clip: float = 1.0
     seed: int = 42
     max_seq_len: int = 512
 
-    # DDP
+    # DDP (disabled for local single-GPU)
     use_ddp: bool = False
     world_size: int = 1
     local_rank: int = 0

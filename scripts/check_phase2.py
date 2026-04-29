@@ -14,8 +14,7 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 import torch
 from duplex.inference.generate import load_duplex_model
 
-CKPT = "checkpoints/duplex-1.4-1.7b/phase2_best.pt"
-QWEN = "models/qwen3-1.7b-base"
+CKPT = "checkpoints/duplex-1.5-4b/phase2_best.pt"
 
 # In-distribution checks: prompts match training data format exactly
 CHECKS = [
@@ -87,7 +86,7 @@ def run():
         sys.exit(1)
 
     print(f"Loading Duplex from {ckpt} ...")
-    model = load_duplex_model(QWEN, ckpt)
+    model = load_duplex_model(ckpt)
     model.eval()
     print("Loaded.\n")
 

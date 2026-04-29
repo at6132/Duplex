@@ -1,5 +1,5 @@
 """
-Generation utilities for Duplex-1 v2 and vanilla Qwen baseline comparison.
+Generation utilities for Duplex-1.5-4B and vanilla baseline comparison.
 """
 
 import torch
@@ -10,27 +10,27 @@ from duplex.duplex_model import DuplexModel
 from duplex.config import DuplexConfig
 
 
-def load_vanilla_qwen(model_path: str, quantize: bool = False):
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+def load_vanilla(model_path: str = None):
+    config = DuplexConfig()
+    path = model_path or config.model_path
+    tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_path,
+        path,
         dtype=torch.bfloat16,
         device_map="auto",
-        attn_implementation="sdpa",
         trust_remote_code=True,
     )
     model.eval()
     return model, tokenizer
 
 
-def load_duplex_model(
-    qwen_path: str,
-    checkpoint_path: str,
-) -> DuplexModel:
-    config = DuplexConfig(qwen_model_path=qwen_path, quantize_4bit=False)
+def load_duplex_model(checkpoint_path: str, model_path: str = None) -> DuplexModel:
+    config = DuplexConfig()
+    if model_path:
+        config.model_path = model_path
     model = DuplexModel(config)
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -39,7 +39,7 @@ def load_duplex_model(
     if "deep_prefix_state_dict" in ckpt:
         model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
     if "lora_state_dict" in ckpt:
-        for name, param in model.qwen.named_parameters():
+        for name, param in model.backbone.named_parameters():
             if name in ckpt["lora_state_dict"]:
                 param.data.copy_(ckpt["lora_state_dict"][name])
 

@@ -132,7 +132,7 @@ class DuplexTrainer:
         return avg
 
     def _get_lora_state_dict(self):
-        return {n: p.data for n, p in self.raw_model.qwen.named_parameters() if p.requires_grad}
+        return {n: p.data for n, p in self.raw_model.backbone.named_parameters() if p.requires_grad}
 
     def save_checkpoint(self, path: str):
         if not self.is_main:
@@ -155,7 +155,7 @@ class DuplexTrainer:
         if "deep_prefix_state_dict" in ckpt:
             self.raw_model.deep_prefix.load_state_dict(ckpt["deep_prefix_state_dict"], strict=False)
         if "lora_state_dict" in ckpt:
-            for name, param in self.raw_model.qwen.named_parameters():
+            for name, param in self.raw_model.backbone.named_parameters():
                 if name in ckpt["lora_state_dict"]:
                     param.data.copy_(ckpt["lora_state_dict"][name])
                 elif param.requires_grad:
@@ -215,7 +215,7 @@ class DuplexTrainer:
                          * self.config.gradient_accumulation_steps
                          * self.world_size)
             print(f"\n{'='*60}")
-            print(f"  Training Duplex-1.4-1.7B | Phase {phase}")
+            print(f"  Training Duplex-1.5-4B | Phase {phase}")
             print(f"{'='*60}")
             print(f"  GPUs: {self.world_size} | Batch/GPU: {self.config.batch_size} | "
                   f"Grad accum: {self.config.gradient_accumulation_steps} | "
